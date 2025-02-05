@@ -33,6 +33,8 @@ seasons = organize_by_season_with_hemisphere(search_dir, hemisphere_sh, years[0]
 # summer_files = load_files_for_season(search_dir, seasons["Summer"])
 summer_files = [os.path.join(summer_data,s) for s in os.listdir(summer_data) if s.endswith('.nc')] 
 
+file2run = next((f for f in summer_files if "clavrx_NSS.GHRR.NJ.D98015.S1728.E1912.B156" in f), None)
+
 lat_intervals = np.arange(-90,90,5)
 
 cde_run_dte = str(date.today().strftime('%Y%m%d'))
@@ -45,7 +47,7 @@ nc_files = [
 
 sh_lat_wind, nh_lat_wind = (-53,-61), (53,61)
 #%%
-# print('********* Building the LUT *********')
+print('********* Building the LUT *********')
 
 # # min_lat, max_lat = 5, 15
 # # Initialize an empty list for storing lookup table entries
@@ -289,12 +291,11 @@ plot_lut_histograms_by_hemisphere('NH', limb_bin_list_by_srftype_nh, limb_hist_l
          
 #%%
 print('********* The correction *********')
-
-# cor_tb_ex = apply_lut_corrections_fast(summer_files[5], 
-#                                        limb_beam_positions, 
-#                                        [(53,61),(-53,-61)], 
-#                                        lut_full, 
-#                                        cor_dir)
+cor_tb_ex = apply_lut_corrections_fast(file2run, 
+                                       limb_beam_positions, 
+                                       [(53,61),(-53,-61)], 
+                                       lut_full, 
+                                       cor_dir)
 
 
 # filt = lut_full.copy()
