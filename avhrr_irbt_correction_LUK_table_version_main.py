@@ -141,14 +141,17 @@ print('********* The nadir stats *********')
 start_time = time.time()
 
 # Example usage
-sh_nadir_bins_by_srftype, sh_nadir_hist_by_srftype, sh_all_nadirs_by_srftype = process_to_get_nadir_stats(group_arrays_dict_sh, 
-                                                                                                          data_ranges_sh, 
-                                                                                                          bin_size)
+sh_nadir_bins_by_srftype, sh_nadir_hist_by_srftype, sh_all_nadirs_by_srftype = process_to_get_nadir_stats(
+    group_arrays_dict_sh, 
+    data_ranges_sh, 
+    bin_size
+)
 
-nh_nadir_bins_by_srftype, nh_nadir_hist_by_srftype, nh_all_nadirs_by_srftype = process_to_get_nadir_stats(group_arrays_dict_nh, 
-                                                                                                          data_ranges_nh, 
-                                                                                                          bin_size)
-    
+nh_nadir_bins_by_srftype, nh_nadir_hist_by_srftype, nh_all_nadirs_by_srftype = process_to_get_nadir_stats(
+    group_arrays_dict_nh, 
+    data_ranges_nh, 
+    bin_size
+)
 # all_nadirs = get_elements_nadir(group_arrays, reference_beam_positions)#np.hstack(nadir_elem)
 # all_nadirs = np.round(all_nadirs,3)
 # # Create histograms with independent ranges
