@@ -277,7 +277,11 @@ for hem, hem_data in zip(['SH', 'NH'], [lookup_table_by_srftype_sh, lookup_table
 
         plt_nme = f'{hem}_Distribution_of_correctiopn_coefficient_per_beam_pos_{sftyp}_{cde_run_dte}.png'
         plt_nme  = os.path.join(plot_dir,plt_nme)
-        box_plot_of_corr_coeff(sftyp_lut,plt_nme)
+        box_plot_of_corr_coeff(sftyp_lut, 'beam_position', 
+                               'corr_coeff', plt_nme)
+        
+        box_plot_of_corr_coeff(sftyp_lut, 'original_tb', 
+                               'corr_coeff', plt_nme)
 #%%
 print('********* The line plot *********')
 
