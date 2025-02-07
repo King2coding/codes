@@ -6,6 +6,9 @@ from plot_functions import *
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
 import matplotlib.ticker as mticker
+import imageio
+import cv2
+
 #%%
 # Example Usage
 base_path = "/ra1/pubdat/AVHRR_CloudSat_proj/AVHRR/1998-2000/l2_subsets/1e132ab/noaa-14"  # Replace with your actual path
@@ -749,6 +752,86 @@ plt.savefig(os.path.join(plot_dir,
 # Show the plot
 plt.show()
 
+#%%
+file4movi = r'/ra1/pubdat/AVHRR_CloudSat_proj/AVHRR/1998-2000/l2_subsets/1e132ab/noaa-14/1998/001'
+
+# Get all .nc files in the directory
+nc_files_ = sorted(glob.glob(os.path.join(file4movi, "*.nc")))
+
+# Initialize lists to store the paths of the generated images
+image_paths = []
+
+# Loop through each file and generate the plot
+for file in nc_files_:
+    data = xr.open_dataset(file)
+    lats = data['latitude'][:, :].data
+    lon = data['longitude'][:, :].data
+
+    nadir_lat = lats[:, 204]
+    nadir_lon = lon[:, 204]
+    limb_lat_left = lats[:, 0]
+    limb_lon_left = lon[:, 0]
+    limb_lat_right = lats[:, 408]
+    limb_lon_right = lon[:, 408]
+
+    # Extract date and time from the file name
+    file_name = os.path.basename(file)
+    date_str = int(file_name.split('.')[3][1:])
+    # Convert year day number to date
+    year = date_str // 1000
+    day_of_year = date_str % 1000
+    date_ = datetime(year, 1, 1) + timedelta(days=day_of_year - 1)
+    date_str = date_.strftime('%Y-%m-%d')
+    # print(date_str)  # Output: 1998-01-01
+    start_time_str = file_name.split('.')[4][1:]
+    end_time_str = file_name.split('.')[5][1:]
+
+    # Define the projection
+    projection = ccrs.PlateCarree()
+
+    # Create a figure and axis with the specified projection
+    fig, ax = plt.subplots(figsize=(10, 15), subplot_kw={'projection': projection}, dpi=500)
+
+    # Add land and ocean features
+    ax.add_feature(cfeature.LAND, zorder=0, edgecolor='black')
+    ax.add_feature(cfeature.OCEAN, zorder=0, edgecolor='black')
+
+    # Plot the nadir and limb latitude lines
+    ax.plot(nadir_lon, nadir_lat, transform=ccrs.PlateCarree(), label='204 beam pos (Nadir) path', color='blue')
+    ax.plot(limb_lon_left, limb_lat_left, transform=ccrs.PlateCarree(), label='0 beam pos (Left Limb) path', color='red')
+    ax.plot(limb_lon_right, limb_lat_right, transform=ccrs.PlateCarree(), label='408 beam pos (Right Limb) path', color='green')
+
+    # Add gridlines
+    gl = ax.gridlines(draw_labels=True, linestyle='--', linewidth=0.8, alpha=0.5, color='gray')
+    gl.xlabel_style = {'size': 18}
+    gl.ylabel_style = {'size': 18}
+    gl.ylocator = mticker.FixedLocator(np.arange(-90, 91, 30))
+
+    # Add a legend
+    ax.legend(loc='upper center', bbox_to_anchor=(0.5, -0.1), ncol=3, frameon=False, fontsize=13)
+
+    # Set the title
+    ax.set_title(f'Nadir and Limb Latitudinal path - Date: {date_str} Time: {start_time_str}-{end_time_str}', fontsize=15)
+
+    # Save the plot as an image
+    image_path = os.path.join(plot_dir, f'nadir_and_limb_latitudinal_path_{date_str}_{start_time_str}_{end_time_str}.png')
+    plt.savefig(image_path, bbox_inches='tight')
+    image_paths.append(image_path)
+    plt.close(fig)
+
+# Create a movie from the images
+# Define the codec and create a VideoWriter object
+movie_path = os.path.join(plot_dir, 'nadir_and_limb_latitudinal_path_movie.mp4')
+frame = cv2.imread(image_paths[0])
+height, width, layers = frame.shape
+video = cv2.VideoWriter(movie_path, cv2.VideoWriter_fourcc(*'mp4v'), 1, (width, height))
+
+for image_path in image_paths:
+    video.write(cv2.imread(image_path))
+
+video.release()
+print(f"Movie saved at {movie_path}")
+
 
 # plt.figure(dpi=250)
 # plt.plot(nadir_lat, (limb_lat_left - limb_lat_right))
@@ -797,6 +880,9 @@ plt.show()
 
 from netCDF4 import Dataset
 import seaborn as sns
+import glob
+import imageio
+from datetime import datetime, timedelta
 
 
 with Dataset(file) as nc:
