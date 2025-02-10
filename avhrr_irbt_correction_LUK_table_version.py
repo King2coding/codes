@@ -7,6 +7,8 @@ import cartopy.crs as ccrs
 import cartopy.feature as cfeature
 import matplotlib.ticker as mticker
 import imageio
+from datetime import datetime, timedelta
+
 import cv2
 
 #%%
@@ -756,7 +758,8 @@ plt.show()
 file4movi = r'/ra1/pubdat/AVHRR_CloudSat_proj/AVHRR/1998-2000/l2_subsets/1e132ab/noaa-14/1998/001'
 
 # Get all .nc files in the directory
-nc_files_ = sorted(glob.glob(os.path.join(file4movi, "*.nc")))
+nc_files_ = [os.path.join(file4movi, f) for f in os.listdir(file4movi) if f.endswith('.nc')]
+# sorted(glob.glob(os.path.join(file4movi, "*.nc")))
 
 # Initialize lists to store the paths of the generated images
 image_paths = []
@@ -880,9 +883,7 @@ plt.show()
 
 from netCDF4 import Dataset
 import seaborn as sns
-import glob
-import imageio
-from datetime import datetime, timedelta
+
 
 
 with Dataset(file) as nc:
