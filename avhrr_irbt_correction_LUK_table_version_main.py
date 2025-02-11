@@ -174,11 +174,11 @@ plot_lut_histograms_by_hemisphere('NH', limb_bin_list_by_srftype_nh, limb_hist_l
          
 #%%
 print('********* The correction *********')
-# cor_tb_ex = apply_lut_corrections_fast(file2run, 
-#                                        limb_beam_positions, 
-#                                        [(53,61),(-53,-61)], 
-#                                        lut_full, 
-#                                        cor_dir)
+cor_tb_ex = apply_lut_corrections_fast(file2run, 
+                                       limb_beam_positions, 
+                                       [(53,61),(-53,-61)], 
+                                       lut_full, 
+                                       cor_dir)
 
 
 
