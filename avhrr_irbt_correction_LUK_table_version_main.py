@@ -4,7 +4,6 @@ from util_functions import *
 from plot_functions import *
 
 #%%
-# Example Usage
 base_path = "/ra1/pubdat/AVHRR_CloudSat_proj/AVHRR/1998-2000/l2_subsets/1e132ab/noaa-14"  # Replace with your actual path
 df_dir = r'/home/kkumah/Projects/AVHRR_IR-TB_correction/results/df'
 plot_dir = r'/home/kkumah/Projects/AVHRR_IR-TB_correction/results/plots'
