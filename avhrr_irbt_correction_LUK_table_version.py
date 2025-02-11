@@ -781,7 +781,6 @@ plot_latitudinal_path(file2run, projection_type='PolarStereographic', hemisphere
 #%%
 file4movi = r'/ra1/pubdat/AVHRR_CloudSat_proj/AVHRR/1998-2000/l2_subsets/1e132ab/noaa-14/1998/001'
 
-# Example usage
 create_movie_from_nc_files(file4movi, plot_dir)
 
 create_movie_from_nc_files(file4movi, plot_dir, 'SH', 'PolarStereographic')
