@@ -107,14 +107,7 @@ def load_files_for_season(base_path, season_folders):
 #----------------------------------------------
 
 def get_elements_nadir(list_of_arrays, positions):
-    elem = []
-    for n in list_of_arrays:
-        data = n[:, positions]  # Nadir beams (middle 100)
-        data_flat = data.flatten()
-        data_flat = data_flat[~np.isnan(data_flat)]
-        if not np.all(np.isnan(data_flat)):
-            elem.append(data_flat)
-    del(n)
+    elem = [n[:, positions].flatten()[~np.isnan(n[:, positions].flatten())] for n in list_of_arrays if not np.all(np.isnan(n[:, positions]))]
     return np.hstack(elem)
 #----------------------------------------------
 
@@ -159,11 +152,15 @@ def get_elements_limb(list_of_arrays, positions):
 
 def create_histogram(temp_values, bin_size, temp_range):    
     # Create bins with a specific step size
-    bins = np.arange(temp_range[0], temp_range[1] + bin_size, bin_size)
+    bins = np.arange(temp_range[0], 
+                     temp_range[1] + bin_size, 
+                     bin_size)
 
     # Compute the histogram
-    hist, bin_edges, _ = binned_statistic(x=temp_values, values=temp_values, 
-                                        statistic='count', bins=bins)
+    hist, bin_edges, _ = binned_statistic(x=temp_values, 
+                                          values=temp_values, 
+                                          statistic='count', 
+                                          bins=bins)
     
     return hist, bin_edges[:-1]
 #----------------------------------------------

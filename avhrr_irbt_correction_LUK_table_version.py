@@ -98,7 +98,7 @@ for file in sorted(summer_files):
     lat_val= -60 #l #latitude_bin_centers[20]
     # lat_wind = [lat_val - 5, lat_val + 5]
     # max_lat, min_lat = max(np.array(lat_wind)), min(np.array(lat_wind))#lat_val - -15, lat_val + -15  
-    max_lat, min_lat = 61, 53 #-53,-61 
+    max_lat, min_lat = 75, 61 #-53,-61 
 
     # Create a mask based on the conditions
     # lat_msk  = create_a_lat_mask(lats, -35, 15)
@@ -117,7 +117,7 @@ for file in sorted(summer_files):
 
     # msk_ = np.logical_and((lat_msk, cld_prob_msk, surfact_type_msk))
     
-    mask = ((lats >= min_lat) & (lats <= max_lat)) & \
+    mask = ((lats > min_lat) & (lats <= max_lat)) & \
            (cloud_probability >= 0.5) & \
            (surfact_type == 0)
 
