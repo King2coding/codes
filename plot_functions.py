@@ -9,6 +9,16 @@ import numpy as np
 import seaborn as sns
 from matplotlib.lines import Line2D
 
+import xarray as xr
+
+import cartopy.crs as ccrs
+import cartopy.feature as cfeature
+import matplotlib.ticker as mticker
+import imageio
+
+import cv2
+
+from datetime import datetime as datme, timedelta as tmdelta
 #%%
 # flaoting variables
 beam_positions = np.array(range(409))
@@ -447,3 +457,142 @@ def box_plot_of_corr_coeff(lut, xcol, ycol, xticks, savefig):
     plt.tight_layout()
     plt.savefig(savefig, dpi=500, bbox_inches='tight')
     plt.show()
+
+#------------------------------------------
+def plot_latitudinal_path(file, projection_type='PlateCarree', hemisphere='global'):
+    data = xr.open_dataset(file)
+    lats = data['latitude'][:, :].data
+    lon = data['longitude'][:, :].data
+    nadir_lat = lats[:, 204]
+    nadir_lat = nadir_lat[~np.isnan(nadir_lat)]
+    nadir_lon = lon[:, 204]
+    nadir_lon = nadir_lon[~np.isnan(nadir_lon)]
+    limb_lat_left = lats[:, 0]
+    limb_lat_left = limb_lat_left[~np.isnan(limb_lat_left)]
+    limb_lon_left = lon[:, 0]
+    limb_lon_left = limb_lon_left[~np.isnan(limb_lon_left)]
+    limb_lat_right = lats[:, 408]
+    limb_lat_right = limb_lat_right[~np.isnan(limb_lat_right)]
+    limb_lon_right = lon[:, 408]
+    limb_lon_right = limb_lon_right[~np.isnan(limb_lon_right)]
+    # Filter data based on hemisphere
+    if hemisphere == 'NH':
+        mask = nadir_lat >= 45
+    elif hemisphere == 'SH':
+        mask = nadir_lat <= -45
+    else:
+        mask = np.ones_like(nadir_lat, dtype=bool)
+    nadir_lat = nadir_lat[mask]
+    nadir_lon = nadir_lon[mask]
+    limb_lat_left = limb_lat_left[mask]
+    limb_lon_left = limb_lon_left[mask]
+    limb_lat_right = limb_lat_right[mask]
+    limb_lon_right = limb_lon_right[mask]
+    # Define the projection
+    if projection_type == 'PolarStereographic':
+        projection = ccrs.Stereographic(central_latitude=45 if hemisphere == 'NH' else -45)
+    else:
+        projection = ccrs.PlateCarree()
+    # Create a figure and axis with the specified projection
+    fig, ax = plt.subplots(figsize=(10, 15), subplot_kw={'projection': projection}, dpi=500)
+    # Plot the nadir and limb latitude lines
+    ax.plot(nadir_lon, nadir_lat, transform=ccrs.PlateCarree(), label='204 beam pos (Nadir) path', color='blue')
+    ax.plot(limb_lon_left, limb_lat_left, transform=ccrs.PlateCarree(), label='0 beam pos (Left Limb) path', color='red')
+    ax.plot(limb_lon_right, limb_lat_right, transform=ccrs.PlateCarree(), label='408 beam pos (Right Limb) path', color='green')
+    ax.coastlines()
+    # Add land and ocean features
+    ax.add_feature(cfeature.LAND, zorder=0, edgecolor='black', facecolor='lightgray')
+    ax.add_feature(cfeature.OCEAN, zorder=0, edgecolor='black')
+    # Add gridlines
+    gl = ax.gridlines(draw_labels=True, linestyle='--', linewidth=0.8, alpha=0.5, color='gray')
+    gl.xlabel_style = {'size': 18}
+    gl.ylabel_style = {'size': 18}
+    gl.xlocator = mticker.FixedLocator(np.arange(-180, 181, 30))
+    gl.ylocator = mticker.FixedLocator(np.arange(-90, 91, 15))
+    gl.right_labels = False
+    gl.top_labels = False
+    gl.bottom_labels = True
+    gl.left_labels = True
+    # Add a legend
+    ax.legend(loc='upper center', bbox_to_anchor=(0.5, -0.1), ncol=3, frameon=False, fontsize=13)
+    # Set the title
+    ax.set_title(f'Nadir and Limb Latitudinal path - {hemisphere}', fontsize=15)
+    # return fig
+
+#------------------------------------------
+def create_movie_from_nc_files(file_dir, plot_dir):
+    
+    # Get the paths of all the .nc files in the directory
+    nc_files = [os.path.join(file_dir, f) for f in os.listdir(file_dir) if f.endswith('.nc')]
+    # Initialize lists to store the paths of the generated images
+    image_paths_nh = []
+    image_paths_sh = []
+
+    for file in nc_files:
+        file_name = os.path.basename(file)
+        date_str = int(file_name.split('.')[3][1:])
+        year = date_str // 1000
+        day_of_year = date_str % 1000
+        date_ = datme(year, 1, 1) + tmdelta(days=day_of_year - 1)
+        date_str = date_.strftime('%Y-%m-%d')
+        start_time_str = file_name.split('.')[4][1:]
+        end_time_str = file_name.split('.')[5][1:]
+
+        for hemisphere in ['NH', 'SH']:
+            fig = plot_latitudinal_path(file, 
+                                        projection_type='PolarStereographic', 
+                                        hemisphere=hemisphere)
+            image_path = os.path.join(plot_dir, 
+                                      f'nadir_and_limb_latitudinal_path_{hemisphere}_{date_str}_{start_time_str}_{end_time_str}.png')
+            plt.savefig(image_path, bbox_inches='tight')
+            if hemisphere == 'NH':
+                image_paths_nh.append(image_path)
+            else:
+                image_paths_sh.append(image_path)
+            plt.close(fig)
+
+    # Create a movie from the images for NH
+    movie_path_nh = os.path.join(plot_dir, 
+                                 'nadir_and_limb_latitudinal_path_movie_NH.mp4')
+    frame = cv2.imread(image_paths_nh[0])
+    height, width, layers = frame.shape
+
+    video_nh = cv2.VideoWriter(movie_path_nh, 
+                               cv2.VideoWriter_fourcc(*'mp4v'), 
+                               1, 
+                               (width, height)
+                               )
+
+    for image_path in image_paths_nh:
+        frame = cv2.imread(image_path)
+        if frame is None:
+            print(f"Error reading {image_path}")
+            continue
+        resized_frame = cv2.resize(frame, (width, height))
+        video_nh.write(resized_frame)
+
+    video_nh.release()
+    print(f"NH Movie saved at {movie_path_nh}")
+
+    # Create a movie from the images for SH
+    movie_path_sh = os.path.join(plot_dir, 
+                                 'nadir_and_limb_latitudinal_path_movie_SH.mp4')
+    frame = cv2.imread(image_paths_sh[0])
+    height, width, layers = frame.shape
+    video_sh = cv2.VideoWriter(movie_path_sh, 
+                               cv2.VideoWriter_fourcc(*'mp4v'), 
+                               1, 
+                               (width, height)
+                               )
+
+    for image_path in image_paths_sh:
+        frame = cv2.imread(image_path)
+        if frame is None:
+            print(f"Error reading {image_path}")
+            continue
+        resized_frame = cv2.resize(frame, (width, height))
+        video_sh.write(resized_frame)
+
+    video_sh.release()
+    print(f"SH Movie saved at {movie_path_sh}")
+#------------------------------------------
