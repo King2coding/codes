@@ -219,7 +219,7 @@ for i in limb_beam_positions:
             "latitude": lat_val,
             "latitude_bin": f"{min_lat}-{max_lat}",
             # "cloud_probability": 0.5,
-            "surface_type": 2,
+            "surface_type": 0,
             "beam_position": i,
             "original_tb": orig_tb,
             "corrected_tb": corr_tb,
@@ -241,7 +241,10 @@ plt_nme = f'Distribution_of_correctiopn_coefficient_per_beam_pos_water_NH_{cde_r
 plt_nme  = os.path.join(plot_dir,plt_nme)
 
 # lookup_df_w = lookup_df[lookup_df['surface_type'] == 0]
-box_plot_of_corr_coeff(lookup_df,plt_nme)
+box_plot_of_corr_coeff(lookup_df,'beam_position', 
+                               'corr_coeff', 
+                               np.arange(0, 410, 50).tolist(),
+                               plt_nme)
 
 
 plt_nme = f'Distribution_of_correctiopn_coefficient_per_beam_pos_snc_NH_{cde_run_dte}.png'
@@ -376,6 +379,7 @@ for b in [0,10,50,100, 400]:
     plt.ylabel('Count')
     plt.grid(which='both', ls = '--', lw='0.5')
     plt.title(ttle, fontdict={'size':12, 'color':'k'})
+    
     plt.savefig(plt_nme, bbox_inches='tight')
 # limb_hist_list[beam_pos]
 #%%
