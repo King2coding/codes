@@ -1042,8 +1042,71 @@ def apply_lut_corrections_fast(datafile, beams, lat_windows, LUT, outdir):
     save_corrected_dataset(dataset, corrected_tb, data_outfile)
 
     return corrected_tb
-#------------------------------------------
+# #------------------------------------------
+def apply_lut_corrections_fast_v2(datafile, beams, lat_windows, LUT, outdir):
+    """
+    Apply corrections to brightness temperatures based on LUT and multiple conditions.
 
+    Parameters:
+    - datafile: Input file to be adjusted.
+    - beams: Limb beam positions.
+    - lat_windows: List of latitude windows for NH and SH.
+    - LUT: Lookup table.
+    - outdir: Output directory for corrected files.
+
+    Returns:
+    - corrected_tb: Corrected brightness temperatures.
+    """
+    # Open the dataset
+    dataset = xr.open_dataset(datafile)
+    lats = dataset['latitude'].data
+    cloud_probs = dataset['cloud_probability'].data
+    cloud_probs_msk = np.where(cloud_probs >= 0.5, cloud_probs, np.nan)
+    surfact_type = dataset['land_class'].data
+    brightness_temp = dataset['temp_11_0um_nom'].data
+    corrected_tb = brightness_temp.copy()  # Copy original data for corrections
+
+    def process_lat_window(lat_window):
+        """
+        Process a single latitude window to apply corrections.
+
+        Parameters:
+        - lat_window: Tuple specifying the latitude range (min_lat, max_lat).
+        """
+        lat_wind_ = f"{lat_window[0]}-{lat_window[1]}"
+        max_lat, min_lat = max(lat_window), min(lat_window)
+        lat_msk = ((lats >= min_lat) & (lats <= max_lat))
+
+        valid_mask = (
+            lat_msk &
+            (~np.isnan(cloud_probs_msk)) &
+            (~np.isnan(brightness_temp)) &
+            (~np.isnan(surfact_type))
+        )
+
+        # Get the indices where the mask is True
+        valid_indices = np.argwhere(valid_mask)
+
+        # Loop only over valid indices
+        for i, j in valid_indices:
+            lat = lats[i, j]
+            original_tb = brightness_temp[i, j]
+            surface_type_val = surfact_type[i, j]
+
+            # Apply correction using the lookup table
+            correction = get_correction(lat_wind_, int(j), surface_type_val, original_tb, LUT)
+            corrected_tb[i, j] = original_tb * correction  # Apply correction
+
+    # Use ProcessPoolExecutor for parallel processing of latitude windows
+    with ProcessPoolExecutor(max_workers=5) as executor:
+        executor.map(process_lat_window, lat_windows)
+
+    # Save the corrected data to a new NetCDF file
+    data_outfile = os.path.join(outdir, os.path.basename(datafile.replace('.nc', '_cor.nc')))
+    save_corrected_dataset(dataset, corrected_tb, data_outfile)
+
+    return corrected_tb
+#------------------------------------------
 # Function save corrected data to NetCDF
 def save_corrected_dataset(dataset, corrected_tb, output_file):  
     cor_obs_diff = corrected_tb - dataset['temp_11_0um_nom'].data  
@@ -1105,7 +1168,7 @@ def process_files_in_parallel(summer_files, lat_windows, lookup_df, limb_beam_po
     observed_arrays = {'NH': {surface_type_id: [] for surface_type_id in surface_type_mapping.keys()},
                        'SH': {surface_type_id: [] for surface_type_id in surface_type_mapping.keys()}}
 
-    with ProcessPoolExecutor(max_workers=20) as executor:
+    with ProcessPoolExecutor(max_workers=10) as executor:
         futures = [
             executor.submit(
                 process_file, season_file, lat_windows,
