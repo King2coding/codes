@@ -119,7 +119,7 @@ for file in sorted(summer_files):
     
     mask = ((lats > min_lat) & (lats <= max_lat)) & \
            (cloud_probability >= 0.5) & \
-           (surfact_type == 0)
+           (surfact_type == 2)
 
     # mask = ((lats >= min_lat) & (lats <= max_lat)) & \
     #        (cloud_probability >= 0.5)
@@ -167,23 +167,6 @@ elapsed_hours = elapsed_seconds / 3600
 # Print results
 print(f"Elapsed time for getting nadir stats: {elapsed_seconds:.2f} seconds ({elapsed_hours:.5f} hours)")
 
-# Initialize an array to store corrected limb data
-# corrected_limb_data = group_data.copy()
-# start time of code
-
-# lookup_table, res = process_limb_positions_with_running_window(
-#                     group_arrays, limb_beam_positions, 
-#                     nadir_bins, nadir_hist, temp_range,
-#                     bin_size, lat_val, min_lat, max_lat, 
-#                     window_size=5)
-
-# for i in range(0, len(limb_beam_positions), step_size):
-#     # Define the range for the current window
-#     start = max(0, limb_beam_positions[i] - window_size)
-#     end = min(409, limb_beam_positions[i] + window_size + 1)
-
-#     print(start, end)
-
 start_time = time.time()
 for i in limb_beam_positions:
     # limb_pos_rng = range(i-10, i+10)
@@ -191,6 +174,7 @@ for i in limb_beam_positions:
     start = max(0, i - 10)  # Ensure the range doesn't go below 0
     end = min(409, i + 10)  # Ensure the range doesn't exceed 409
     limb_pos_rng = range(start, end)
+    print(limb_pos_rng)
     all_limbs_at_i = get_elements_limb(group_arrays, 
                                         limb_pos_rng)
     all_limbs_at_i = np.round(all_limbs_at_i,3)
@@ -219,9 +203,9 @@ for i in limb_beam_positions:
             "latitude": lat_val,
             "latitude_bin": f"{min_lat}-{max_lat}",
             # "cloud_probability": 0.5,
-            "surface_type": 0,
+            "surface_type": 2,
             "beam_position": i,
-            "original_tb": orig_tb,
+            "original_tb": round(orig_tb,3),
             "corrected_tb": corr_tb,
             "corr_coeff": corr_tb/orig_tb
         })                          
@@ -379,7 +363,7 @@ for b in [0,10,50,100, 400]:
     plt.ylabel('Count')
     plt.grid(which='both', ls = '--', lw='0.5')
     plt.title(ttle, fontdict={'size':12, 'color':'k'})
-    
+
     plt.savefig(plt_nme, bbox_inches='tight')
 # limb_hist_list[beam_pos]
 #%%
@@ -396,7 +380,7 @@ for season_file in summer_files:
     output_filenme = os.path.basename(season_file).replace('.nc','_cor.nc')
     output_filenme = os.path.join(cor_dir,output_filenme)
 
-    cor_tb = apply_lut_corrections_fast(season_file, limb_beam_positions,
+    cor_tb = apply_lut_corrections_fast_v2(season_file, limb_beam_positions,
                                    target_lat, tolerance, lookup_df)
     obs_tb = xr.open_dataset(season_file)['temp_11_0um_nom']
     lats_ = obs_tb['latitude'].data

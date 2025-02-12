@@ -43,9 +43,37 @@ surface_type_mapping = {
     2: 'snow-covered land',
     3: 'ice'
 }
+
 #%%
 # the fucntions
-
+# Customized surface type mapping based on hemisphere, season, and latitude range
+def get_custom_surface_type_mapping(hemisphere, season, lat_range):
+    min_lat, max_lat = min(lat_range), max(lat_range)
+    if hemisphere == 'Southern':
+        if lat_range == (-75, -61):
+            return {
+                0: 'water',
+                2: 'snow-covered land',
+                3: 'ice'
+            }
+        elif lat_range == (-61, -53):
+            return {
+                0: 'water',                
+                3: 'ice'
+            }
+        else:
+            return surface_type_mapping
+    elif hemisphere == 'Northern':
+        if season == 'Winter' and (65 <= min_lat <= 75 or 65 <= max_lat <= 75):
+            return {
+                0: 'water',
+                2: 'snow-covered land',
+                3: 'ice'
+            }
+        else:
+            return surface_type_mapping
+    else:
+        return surface_type_mapping
 # Function to find season given month
 def find_season(month, hemisphere):
     if hemisphere == 'Southern':
@@ -132,22 +160,15 @@ def create_a_lat_mask(lat_data, target_lat, tolerance):
     
     return mask
 #----------------------------------------------
-
 def get_elements_limb(list_of_arrays, positions):
-    limb_elem = []
-    for n in list_of_arrays:
-        lposs = [p for p in positions if p in beam_positions]
-        limb_irtbs = n[:,lposs].flatten()
-
-        # limb_irtbs = np.concatenate(
-        # [n[:, lpos].flatten() for lpos in positions 
-        # if lpos in beam_positions and lpos not in reference_beam_positions]
-        # ) # 
-        limb_irtbs = limb_irtbs[~np.isnan(limb_irtbs)]
-        if not np.all(np.isnan(limb_irtbs)):
-            limb_elem.append(limb_irtbs)
-    del(n)
-    return np.hstack(limb_elem)
+    limb_elem = [
+        n[:, positions].flatten()[~np.isnan(n[:, positions].flatten())]
+        for n in list_of_arrays if not np.all(np.isnan(n[:, positions]))
+    ]
+    if limb_elem:
+        return np.hstack(limb_elem)
+    else:
+        return np.array([])
 #----------------------------------------------
 
 def create_histogram(temp_values, bin_size, temp_range):    
@@ -209,7 +230,7 @@ def get_group_data(files, ir_var, lat_window):
             # 
             max_lat, min_lat = max(lat_window), min(lat_window)         
 
-            mask = ((lats >= min_lat) & (lats <= max_lat)) & \
+            mask = ((lats > min_lat) & (lats <= max_lat)) & \
                    (cloud_probability >= 0.5) & (surfact_type == surface_type_id) 
 
             mask = np.where((mask == True),1,np.nan)           

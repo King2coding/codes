@@ -44,7 +44,7 @@ nc_files = [
     for filename in filenames if filename.endswith(".nc")
 ]
 
-sh_lat_wind, nh_lat_wind = (-53,-61), (53,61)
+sh_lat_wind, nh_lat_wind = (-75,-61), (61,75)
 
 #%%
 print('********* The group data *********')
@@ -86,6 +86,7 @@ nh_nadir_bins_by_srftype, nh_nadir_hist_by_srftype, nh_all_nadirs_by_srftype = p
 
 print(f"Elapsed time for getting limb stats: {elapsed_seconds:.2f} seconds "
     f"({elapsed_minutes:.2f} minutes) ({elapsed_hours:.5f} hours)")
+
 #%%
 print('********* The limb stats *********')
 # Initialize an array to store corrected limb data
@@ -174,9 +175,9 @@ plot_lut_histograms_by_hemisphere('NH', limb_bin_list_by_srftype_nh, limb_hist_l
          
 #%%
 print('********* The correction *********')
-cor_tb_ex = apply_lut_corrections_fast(file2run, 
+cor_tb_ex = apply_lut_corrections_fast_v2(file2run, 
                                        limb_beam_positions, 
-                                       [(53,61),(-53,-61)], 
+                                       [(61,75),(-75,-61)], 
                                        lut_full, 
                                        cor_dir)
 
