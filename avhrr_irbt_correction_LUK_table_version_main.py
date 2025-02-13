@@ -157,21 +157,22 @@ lut_full.to_csv(lut_name, index=False)
 for hem, hem_data in zip(['SH', 'NH'], [lookup_table_by_srftype_sh, lookup_table_by_srftype_nh]):
     print(hem)
     for i in surface_type_mapping.keys():
-        sftyp = surface_type_mapping[i]
-        sftyp_lut = hem_data[i]
-        plt_nme = f'{hem}_summer_mean_correction_coeff_at_beam_position_{sftyp}_{cde_run_dte}.png'
-        plt_nme  = os.path.join(plot_dir, plt_nme)
-        plt.figure()
-        groupby_and_plot(sftyp_lut, 'beam_position', 'corr_coeff', sftyp,hem)       
-        plt.savefig(plt_nme, dpi=300, bbox_inches='tight')
+        if i in hem_data.keys():
+            sftyp = surface_type_mapping[i]
+            sftyp_lut = hem_data[i]
+            plt_nme = f'{hem}_summer_mean_correction_coeff_at_beam_position_{sftyp}_{cde_run_dte}.png'
+            plt_nme  = os.path.join(plot_dir, plt_nme)
+            plt.figure()
+            groupby_and_plot(sftyp_lut, 'beam_position', 'corr_coeff', sftyp,hem)       
+            plt.savefig(plt_nme, dpi=300, bbox_inches='tight')
 
-        plt_nme = f'{hem}_Distribution_of_correctiopn_coefficient_per_beam_pos_{sftyp}_{cde_run_dte}.png'
-        plt_nme  = os.path.join(plot_dir,plt_nme)
-        box_plot_of_corr_coeff(sftyp_lut, 
-                               'beam_position', 
-                               'corr_coeff', 
-                               np.arange(0, 410, 50).tolist(), 
-                               plt_nme)                
+            plt_nme = f'{hem}_Distribution_of_correctiopn_coefficient_per_beam_pos_{sftyp}_{cde_run_dte}.png'
+            plt_nme  = os.path.join(plot_dir,plt_nme)
+            box_plot_of_corr_coeff(sftyp_lut, 
+                                'beam_position', 
+                                'corr_coeff', 
+                                np.arange(0, 410, 50).tolist(), 
+                                plt_nme)                
 #%%
 print('********* The line plot *********')
 
@@ -188,8 +189,8 @@ plot_lut_histograms_by_hemisphere('NH', limb_bin_list_by_srftype_nh, limb_hist_l
          
 #%%
 print('********* The correction *********')
-cor_tb_ex = apply_lut_corrections_fast_v2(file2run, 
-                                       limb_beam_positions, 
+# limb_beam_positions, 
+cor_tb_ex = apply_lut_corrections_fast(file2run,   limb_beam_positions,                                      
                                        [(61,75),(-75,-61)], 
                                        lut_full, 
                                        cor_dir)
