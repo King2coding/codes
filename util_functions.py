@@ -50,7 +50,7 @@ surface_type_mapping = {
 def get_custom_surface_type_mapping(hemisphere, season, lat_range):
     seesns = ['Summer', 'Autumn', 'Winter', 'Spring']
     min_lat, max_lat = min(lat_range), max(lat_range)
-    if hemisphere == 'Southern':
+    if hemisphere == 'SH':
         
         if (season in seesns) and (lat_range == (-75, -61)):
             return {
@@ -68,7 +68,7 @@ def get_custom_surface_type_mapping(hemisphere, season, lat_range):
                 3: 'ice'
             }
         
-    elif hemisphere == 'Northern':
+    elif hemisphere == 'NH':
         if (season in ['Winter', 'Autumn']) and (lat_range == (61, 75)):
             return {
                 0: 'water',
@@ -206,7 +206,7 @@ def create_histogram(temp_values, bin_size, temp_range):
     return hist, bin_edges[:-1]
 #----------------------------------------------
 
-def get_group_data(files, ir_var, lat_window):
+def get_group_data(files, ir_var, hem, seasn, lat_window):
     """
     Process a list of NetCDF files to extract and group infrared brightness temperature data 
     based on surface type and latitude window.
@@ -245,7 +245,8 @@ def get_group_data(files, ir_var, lat_window):
         surfact_type = data['land_class'].data  # Surface type
 
         # Iterate over different surface types 
-        for surface_type_id, surface_type_name in surface_type_mapping.items(): 
+        surface_type_elements = get_custom_surface_type_mapping(hem,seasn,lat_window)
+        for surface_type_id, surface_type_name in .items(): 
             # print(surface_type_id,surface_type_name)  
             # 
             max_lat, min_lat = max(lat_window), min(lat_window)         
