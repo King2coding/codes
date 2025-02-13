@@ -228,7 +228,7 @@ def get_group_data(files, ir_var, hem, seasn, lat_window):
     surface_type_elements = get_custom_surface_type_mapping(hem, seasn, lat_window) 
 
     surface_type_names = list(surface_type_elements.values())
-    print(f"Processing {surface_type_names} data")
+    print(f"Processing {surface_type_names} data for {hem} hemisphere in {seasn} season")
 
     # Initialize a dictionary to store group arrays for different surface types
     group_arrays_dict = {surface_type_id: [] for surface_type_id in surface_type_elements.keys()}
