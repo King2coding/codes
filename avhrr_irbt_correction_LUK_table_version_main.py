@@ -57,7 +57,11 @@ group_arrays_dict_sh, data_ranges_sh = get_group_data(summer_files,
                                                       'Summer',
                                                       sh_lat_wind)
 
-group_arrays_dict_nh, data_ranges_nh = get_group_data(summer_files,'temp_11_0um_nom',nh_lat_wind)
+group_arrays_dict_nh, data_ranges_nh = get_group_data(summer_files,
+                                                      'temp_11_0um_nom',
+                                                      'NH',
+                                                      'Winter',
+                                                      nh_lat_wind)
 
 # End time of code
 end_time = time.time()
