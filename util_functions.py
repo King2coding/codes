@@ -51,7 +51,7 @@ def get_custom_surface_type_mapping(hemisphere, season, lat_range):
     seesns = ['Summer', 'Autumn', 'Winter', 'Spring']
     min_lat, max_lat = min(lat_range), max(lat_range)
     if hemisphere == 'Southern':
-
+        
         if (season in seesns) and (lat_range == (-75, -61)):
             return {
                 0: 'water',
@@ -69,7 +69,6 @@ def get_custom_surface_type_mapping(hemisphere, season, lat_range):
             }
         
     elif hemisphere == 'Northern':
-        
         if (season in ['Winter', 'Autumn']) and (lat_range == (61, 75)):
             return {
                 0: 'water',
