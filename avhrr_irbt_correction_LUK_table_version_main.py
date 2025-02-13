@@ -54,7 +54,7 @@ print('********* The group data *********')
 
 start_time = time.time()
 
-group_arrays_dict_sh, data_ranges_sh = get_group_data(summer_files[:10],
+group_arrays_dict_sh, data_ranges_sh = get_group_data(summer_files,
                                                       'temp_11_0um_nom', 
                                                       'SH', 
                                                       'Summer',
