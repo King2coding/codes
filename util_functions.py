@@ -225,7 +225,10 @@ def get_group_data(files, ir_var, hem, seasn, lat_window):
     count = 0
 
     # Define surface type elements based on hemisphere and season
-    surface_type_elements = get_custom_surface_type_mapping(hem, seasn, lat_window)   
+    surface_type_elements = get_custom_surface_type_mapping(hem, seasn, lat_window) 
+
+    surface_type_names = list(surface_type_elements.values())
+    print(f"Processing {surface_type_names} data")
 
     # Initialize a dictionary to store group arrays for different surface types
     group_arrays_dict = {surface_type_id: [] for surface_type_id in surface_type_elements.keys()}
@@ -243,7 +246,7 @@ def get_group_data(files, ir_var, hem, seasn, lat_window):
         surfact_type = data['land_class'].data  # Surface type
         
         for surface_type_id, surface_type_name in surface_type_elements.items(): 
-            print(surface_type_id,surface_type_name)  
+            # print(surface_type_id,surface_type_name)  
             # 
             max_lat, min_lat = max(lat_window), min(lat_window)         
 
