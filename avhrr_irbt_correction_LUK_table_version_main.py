@@ -25,16 +25,19 @@ hemisphere_sh = "Northern"  # Change to 'Northern' for the Northern Hemisphere
 years = sorted([int(i) for i in os.listdir(base_path)])
 
 search_dir = os.path.join(base_path,str(years[0]))
-# Organize folders into seasons
+# Organize folders into seasons based on SH
 seasons = organize_by_season_with_hemisphere(search_dir, hemisphere_sh, years[0])
 
 # Example: Load files for Summer
 # summer_files = load_files_for_season(search_dir, seasons["Summer"])
+
+seasonal_files = {}
+for season in seasons.keys():
+    seasonal_files[season] = load_files_for_season(search_dir, seasons[season])
+
 summer_files = [os.path.join(summer_data,s) for s in os.listdir(summer_data) if s.endswith('.nc')] 
 
 file2run = next((f for f in summer_files if "clavrx_NSS.GHRR.NJ.D98015.S1728.E1912.B156" in f), None)
-
-lat_intervals = np.arange(-90,90,5)
 
 cde_run_dte = str(date.today().strftime('%Y%m%d'))
 
