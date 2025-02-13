@@ -48,32 +48,53 @@ surface_type_mapping = {
 # the fucntions
 # Customized surface type mapping based on hemisphere, season, and latitude range
 def get_custom_surface_type_mapping(hemisphere, season, lat_range):
+    seesns = ['Summer', 'Autumn', 'Winter', 'Spring']
     min_lat, max_lat = min(lat_range), max(lat_range)
     if hemisphere == 'Southern':
-        if lat_range == (-75, -61):
+
+        if (season in seesns) and (lat_range == (-75, -61)):
             return {
                 0: 'water',
                 2: 'snow-covered land',
                 3: 'ice'
             }
-        elif lat_range == (-61, -53):
+        elif (season in ['Summer', 'Spring']) and (lat_range == (-61, -53)):
             return {
                 0: 'water',                
+            }
+        elif (season in ['Autumn', 'Winter']) and (lat_range == (-61, -53)):
+            return {
+                0: 'water',
                 3: 'ice'
             }
-        else:
-            return surface_type_mapping
+        
     elif hemisphere == 'Northern':
-        if season == 'Winter' and (65 <= min_lat <= 75 or 65 <= max_lat <= 75):
+        
+        if (season in ['Winter', 'Autumn']) and (lat_range == (61, 75)):
             return {
                 0: 'water',
                 2: 'snow-covered land',
                 3: 'ice'
             }
-        else:
-            return surface_type_mapping
-    else:
-        return surface_type_mapping
+        elif (season in ['Spring', 'Summer']) and (lat_range == (61, 75)):
+            return {
+                0: 'water',
+                2: 'snow-free land',                
+            }
+        
+        elif (season in ['Spring', 'Summer']) and (lat_range == (53, 61)):
+            return {
+                0: 'water',
+                2: 'snow-free land',                
+            }
+        
+        elif (season in ['Winter', 'Autumn']) and (lat_range == (53, 61)):
+            return {
+                0: 'water',
+                2: 'snow-covered land',    
+                3: 'ice'            
+            }       
+#----------------------------------------------   
 # Function to find season given month
 def find_season(month, hemisphere):
     if hemisphere == 'Southern':
