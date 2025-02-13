@@ -411,11 +411,64 @@ def process_to_get_limb_stats(group_arrays_dict, data_ranges,
 
         print(f"Processed {surf_type} data")
     
-    return (lookup_table_by_srftype, limb_hist_list_by_srftype, limb_bin_list_by_srftype, 
-            nadir_hist_list_by_srftype, nadir_bin_list_by_srftype, adjusted_limb_bins_list_by_srftype, 
+    return (lookup_table_by_srftype, 
+            limb_hist_list_by_srftype, limb_bin_list_by_srftype, 
+            nadir_hist_list_by_srftype, nadir_bin_list_by_srftype, 
+            adjusted_limb_bins_list_by_srftype, 
             all_limbs_at_i_list_by_srftype)
 
 #----------------------------------------------
+def process_to_get_limb_stats_fast(group_arrays_dict, data_ranges, 
+                              nadir_bins_by_srftype, nadir_hist_by_srftype, 
+                              lat_wind):
+
+    def process_surface_type(surf_type, group_arrays, srf_type_data_ranges, srf_type_nadir_bins, srf_type_nadir_hist):
+        lookup_table, limb_hist_list, limb_bin_list, nadir_hist_list, \
+        nadir_bin_list, adjusted_limb_bins_list, all_limbs_at_i_list = get_LUT(group_arrays, 
+                                                                               srf_type_nadir_bins, 
+                                                                               srf_type_nadir_hist, 
+                                                                               srf_type_data_ranges, 
+                                                                               lat_wind, surf_type)
+        return (surf_type, pd.DataFrame(lookup_table), limb_hist_list, limb_bin_list, nadir_hist_list, 
+                nadir_bin_list, adjusted_limb_bins_list, all_limbs_at_i_list)
+
+    lookup_table_by_srftype = {}
+    limb_hist_list_by_srftype = {}
+    limb_bin_list_by_srftype = {}
+    nadir_hist_list_by_srftype = {}
+    nadir_bin_list_by_srftype = {}
+    adjusted_limb_bins_list_by_srftype = {}
+    all_limbs_at_i_list_by_srftype = {}
+
+    with ProcessPoolExecutor(max_workers=5) as executor:
+        futures = [
+            executor.submit(process_surface_type, surf_type, group_arrays, data_ranges[surf_type], 
+                            nadir_bins_by_srftype[surf_type], nadir_hist_by_srftype[surf_type])
+            for surf_type, group_arrays in group_arrays_dict.items()
+        ]
+
+        for future in futures:
+            surf_type, lookup_table, limb_hist_list, limb_bin_list, nadir_hist_list, \
+            nadir_bin_list, adjusted_limb_bins_list, all_limbs_at_i_list = future.result()
+            
+            lookup_table_by_srftype[surf_type] = lookup_table
+            limb_hist_list_by_srftype[surf_type] = limb_hist_list
+            limb_bin_list_by_srftype[surf_type] = limb_bin_list
+            nadir_hist_list_by_srftype[surf_type] = nadir_hist_list
+            nadir_bin_list_by_srftype[surf_type] = nadir_bin_list
+            adjusted_limb_bins_list_by_srftype[surf_type] = adjusted_limb_bins_list
+            all_limbs_at_i_list_by_srftype[surf_type] = all_limbs_at_i_list
+
+            print(f"Processed {surf_type} data")
+    
+    return (lookup_table_by_srftype, 
+            limb_hist_list_by_srftype, limb_bin_list_by_srftype, 
+            nadir_hist_list_by_srftype, nadir_bin_list_by_srftype, 
+            adjusted_limb_bins_list_by_srftype, 
+            all_limbs_at_i_list_by_srftype)
+
+#----------------------------------------------
+
 def create_histogram_of_histogram(binss,hists):
     bin_edges = np.linspace(binss.min(), binss.max(), 100)  # Adjust number of bins
     binned_hist, _, _ = binned_statistic(binss, hists, 
