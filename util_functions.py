@@ -49,7 +49,7 @@ surface_type_mapping = {
 # Customized surface type mapping based on hemisphere, season, and latitude range
 def get_custom_surface_type_mapping(hemisphere, season, lat_range):
     seesns = ['Summer', 'Autumn', 'Winter', 'Spring']
-    min_lat, max_lat = min(lat_range), max(lat_range)
+    
     if hemisphere == 'SH':
         
         if (season in seesns) and (lat_range == (-75, -61)):
