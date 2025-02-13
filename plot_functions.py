@@ -388,7 +388,6 @@ def plot_lut_histograms_by_hemisphere(hemisphere, limb_bin_list_by_srftype, limb
                                                nadir_hist_list_by_srftype[id],                                       
                                                beam_pos, ttle, plt_nme)
             
-
 #------------------------------------------
 def groupby_and_plot(dat, grb_col, plt_col, srftyp, hem):
     dat_grpby = dat.groupby(grb_col, as_index=True)[plt_col].mean()
