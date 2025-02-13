@@ -244,7 +244,7 @@ def get_group_data(files, ir_var, hem, seasn, lat_window):
         cloud_probability = data['cloud_probability'].data # Cloud probability
         surfact_type = data['land_class'].data  # Surface type
 
-        # Iterate over different surface types 
+        # Get surface types and iterate over different surface types 
         surface_type_elements = get_custom_surface_type_mapping(hem,seasn,lat_window)
         for surface_type_id, surface_type_name in surface_type_elements.items(): 
             # print(surface_type_id,surface_type_name)  
