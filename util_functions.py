@@ -380,6 +380,7 @@ def get_LUT(group_data, nadir_bins, nadir_hist, data_range, lat_window, surface_
 def process_to_get_limb_stats(group_arrays_dict, data_ranges, 
                               nadir_bins_by_srftype, nadir_hist_by_srftype, 
                               lat_wind):
+    
     lookup_table_by_srftype = {}
     limb_hist_list_by_srftype = {}
     limb_bin_list_by_srftype = {}
@@ -389,6 +390,7 @@ def process_to_get_limb_stats(group_arrays_dict, data_ranges,
     all_limbs_at_i_list_by_srftype = {}
 
     for surf_type, group_arrays in group_arrays_dict.items():
+
         surf_type_grp_array = group_arrays
         srf_type_data_ranges = data_ranges[surf_type]
 
@@ -440,7 +442,7 @@ def process_to_get_limb_stats_fast(group_arrays_dict, data_ranges,
     adjusted_limb_bins_list_by_srftype = {}
     all_limbs_at_i_list_by_srftype = {}
 
-    with ProcessPoolExecutor(max_workers=5) as executor:
+    with ProcessPoolExecutor(max_workers=4) as executor:
         futures = [
             executor.submit(process_surface_type, surf_type, group_arrays, data_ranges[surf_type], 
                             nadir_bins_by_srftype[surf_type], nadir_hist_by_srftype[surf_type])
