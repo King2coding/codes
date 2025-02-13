@@ -106,7 +106,8 @@ start_time = time.time()
 
 (lookup_table_by_srftype_sh, limb_hist_list_by_srftype_sh, limb_bin_list_by_srftype_sh, 
  nadir_hist_list_by_srftype_sh, nadir_bin_list_by_srftype_sh, adjusted_limb_bins_list_by_srftype_sh, 
- all_limbs_at_i_list_by_srftype_sh) = process_to_get_limb_stats_fast(group_arrays_dict_sh, 
+ all_limbs_at_i_list_by_srftype_sh) = process_to_get_limb_stats_fast(
+                                                         group_arrays_dict_sh, 
                                                          data_ranges_sh, 
                                                          sh_nadir_bins_by_srftype, 
                                                          sh_nadir_hist_by_srftype, 
@@ -115,7 +116,8 @@ start_time = time.time()
 #--------------------------------------------------------
 (lookup_table_by_srftype_nh, limb_hist_list_by_srftype_nh, limb_bin_list_by_srftype_nh,
  nadir_hist_list_by_srftype_nh, nadir_bin_list_by_srftype_nh, adjusted_limb_bins_list_by_srftype_nh,
- all_limbs_at_i_list_by_srftype_nh) = process_to_get_limb_stats_fast(group_arrays_dict_nh,
+ all_limbs_at_i_list_by_srftype_nh) = process_to_get_limb_stats_fast(
+                                                                group_arrays_dict_nh,
                                                                 data_ranges_nh,
                                                                 nh_nadir_bins_by_srftype,
                                                                 nh_nadir_hist_by_srftype,

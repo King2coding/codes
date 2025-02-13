@@ -1081,7 +1081,8 @@ def apply_lut_corrections_slow(datafile, beams, target_lat, tol, LUT):
                     np.isnan(surface_type_val)    :
               
                 correction = get_correction(lat, j, original_tb, LUT)
-                corrected_tb[i, j] = original_tb * correction  # Apply correction
+                if correction is not None:
+                    corrected_tb[i, j] = original_tb * correction  # Apply correction
 
     return corrected_tb
 
@@ -1119,7 +1120,6 @@ def apply_lut_corrections_fast(datafile, beams, lat_windows, LUT, outdir):
             (~np.isnan(brightness_temp)) &
             (~np.isnan(surfact_type))
         )
-
         # Get the indices where the mask is True
         valid_indices = np.argwhere(valid_mask)
 
@@ -1136,18 +1136,18 @@ def apply_lut_corrections_fast(datafile, beams, lat_windows, LUT, outdir):
             corrected_tb[i, j] = original_tb * correction  # Apply correction
 
     # Save the corrected data to a new NetCDF file
-    data_outfile = os.path.join(outdir, os.path.basename(datafile.replace('.nc', '_cor.nc')))
+    data_outfile = os.path.join(outdir, os.path.basename(datafile.replace('.nc', '_cor_.nc')))
     save_corrected_dataset(dataset, corrected_tb, data_outfile)
 
     return corrected_tb
-# #------------------------------------------
-def apply_lut_corrections_fast_v2(datafile, beams, lat_windows, LUT, outdir):
+
+#------------------------------------------
+def apply_lut_corrections_fast_v2(datafile, lat_windows, LUT, outdir):
     """
     Apply corrections to brightness temperatures based on LUT and multiple conditions.
 
     Parameters:
     - datafile: Input file to be adjusted.
-    - beams: Limb beam positions.
     - lat_windows: List of latitude windows for NH and SH.
     - LUT: Lookup table.
     - outdir: Output directory for corrected files.
@@ -1164,6 +1164,9 @@ def apply_lut_corrections_fast_v2(datafile, beams, lat_windows, LUT, outdir):
     brightness_temp = dataset['temp_11_0um_nom'].data
     corrected_tb = brightness_temp.copy()  # Copy original data for corrections
 
+    # Get unique surface types from LUT
+    unique_surface_types = LUT['surface_type'].unique()
+
     def process_lat_window(lat_window):
         """
         Process a single latitude window to apply corrections.
@@ -1173,13 +1176,13 @@ def apply_lut_corrections_fast_v2(datafile, beams, lat_windows, LUT, outdir):
         """
         lat_wind_ = f"{lat_window[0]}-{lat_window[1]}"
         max_lat, min_lat = max(lat_window), min(lat_window)
-        lat_msk = ((lats >= min_lat) & (lats <= max_lat))
+        lat_msk = ((lats > min_lat) & (lats <= max_lat))
 
         valid_mask = (
             lat_msk &
             (~np.isnan(cloud_probs_msk)) &
             (~np.isnan(brightness_temp)) &
-            (~np.isnan(surfact_type))
+            np.isin(surfact_type, unique_surface_types)
         )
 
         # Get the indices where the mask is True
@@ -1187,7 +1190,6 @@ def apply_lut_corrections_fast_v2(datafile, beams, lat_windows, LUT, outdir):
 
         # Loop only over valid indices
         for i, j in valid_indices:
-            lat = lats[i, j]
             original_tb = brightness_temp[i, j]
             surface_type_val = surfact_type[i, j]
 
@@ -1200,7 +1202,7 @@ def apply_lut_corrections_fast_v2(datafile, beams, lat_windows, LUT, outdir):
         executor.map(process_lat_window, lat_windows)
 
     # Save the corrected data to a new NetCDF file
-    data_outfile = os.path.join(outdir, os.path.basename(datafile.replace('.nc', '_cor.nc')))
+    data_outfile = os.path.join(outdir, os.path.basename(datafile.replace('.nc', '_cor_.nc')))
     save_corrected_dataset(dataset, corrected_tb, data_outfile)
 
     return corrected_tb
