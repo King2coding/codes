@@ -1087,7 +1087,7 @@ def apply_lut_corrections_slow(datafile, beams, target_lat, tol, LUT):
     return corrected_tb
 
 
-def apply_lut_corrections_fast(datafile, beams, lat_windows, LUT, outdir):
+def apply_lut_corrections_fast(datafile, lat_windows, LUT, outdir):
     """
     Apply corrections to brightness temperatures based on LUT and multiple conditions.
 
@@ -1125,15 +1125,16 @@ def apply_lut_corrections_fast(datafile, beams, lat_windows, LUT, outdir):
 
         # Loop only over valid indices
         for i, j in valid_indices:
-            lat = lats[i, j]
-            original_tb = brightness_temp[i, j]
-            surface_type_val = surfact_type[i, j]
+            if j in limb_beam_positions:
+                lat = lats[i, j]
+                original_tb = brightness_temp[i, j]
+                surface_type_val = surfact_type[i, j]
 
-            # print(j, original_tb, surface_type_val, lat_wind_)
+                # print(j, original_tb, surface_type_val, lat_wind_)
 
-            # Apply correction using the lookup table
-            correction = get_correction(lat_wind_, int(j), surface_type_val, original_tb, LUT)
-            corrected_tb[i, j] = original_tb * correction  # Apply correction
+                # Apply correction using the lookup table
+                correction = get_correction(lat_wind_, int(j), surface_type_val, original_tb, LUT)
+                corrected_tb[i, j] = original_tb * correction  # Apply correction
 
     # Save the corrected data to a new NetCDF file
     data_outfile = os.path.join(outdir, os.path.basename(datafile.replace('.nc', '_cor_.nc')))
@@ -1142,6 +1143,20 @@ def apply_lut_corrections_fast(datafile, beams, lat_windows, LUT, outdir):
     return corrected_tb
 
 #------------------------------------------
+def process_index(index, brightness_temp, surfact_type, lat_wind_, LUT):
+    i, j = index
+    if j in limb_beam_positions:
+        original_tb = brightness_temp[i, j]
+        surface_type_val = surfact_type[i, j]
+
+        # Apply correction using the lookup table
+        correction = get_correction(lat_wind_, int(j), surface_type_val, original_tb, LUT)
+        return (i, j, original_tb * correction)  # Return the corrected value
+    return None
+
+def process_index_helper(index, brightness_temp, surfact_type, lat_wind_, LUT):
+    return process_index(index, brightness_temp, surfact_type, lat_wind_, LUT)
+
 def apply_lut_corrections_fast_v2(datafile, lat_windows, LUT, outdir):
     """
     Apply corrections to brightness temperatures based on LUT and multiple conditions.
@@ -1164,45 +1179,31 @@ def apply_lut_corrections_fast_v2(datafile, lat_windows, LUT, outdir):
     brightness_temp = dataset['temp_11_0um_nom'].data
     corrected_tb = brightness_temp.copy()  # Copy original data for corrections
 
-    # Get unique surface types from LUT
-    unique_surface_types = LUT['surface_type'].unique()
-
-    def process_lat_window(lat_window):
-        """
-        Process a single latitude window to apply corrections.
-
-        Parameters:
-        - lat_window: Tuple specifying the latitude range (min_lat, max_lat).
-        """
+    for lat_window in lat_windows:
         lat_wind_ = f"{lat_window[0]}-{lat_window[1]}"
         max_lat, min_lat = max(lat_window), min(lat_window)
-        lat_msk = ((lats > min_lat) & (lats <= max_lat))
-
+        lat_msk = ((lats >= min_lat) & (lats <= max_lat))
         valid_mask = (
             lat_msk &
             (~np.isnan(cloud_probs_msk)) &
             (~np.isnan(brightness_temp)) &
-            np.isin(surfact_type, unique_surface_types)
+            (~np.isnan(surfact_type))
         )
-
         # Get the indices where the mask is True
         valid_indices = np.argwhere(valid_mask)
 
-        # Loop only over valid indices
-        for i, j in valid_indices:
-            original_tb = brightness_temp[i, j]
-            surface_type_val = surfact_type[i, j]
+        # Use ProcessPoolExecutor for parallel processing of valid indices
+        with ProcessPoolExecutor(max_workers=10) as executor:
+            results = list(executor.map(process_index_helper, valid_indices, [brightness_temp]*len(valid_indices), [surfact_type]*len(valid_indices), [lat_wind_]*len(valid_indices), [LUT]*len(valid_indices)))
 
-            # Apply correction using the lookup table
-            correction = get_correction(lat_wind_, int(j), surface_type_val, original_tb, LUT)
-            corrected_tb[i, j] = original_tb * correction  # Apply correction
-
-    # Use ProcessPoolExecutor for parallel processing of latitude windows
-    with ProcessPoolExecutor(max_workers=5) as executor:
-        executor.map(process_lat_window, lat_windows)
+        # Update the corrected_tb array with the results
+        for result in results:
+            if result is not None:
+                i, j, corrected_value = result
+                corrected_tb[i, j] = corrected_value
 
     # Save the corrected data to a new NetCDF file
-    data_outfile = os.path.join(outdir, os.path.basename(datafile.replace('.nc', '_cor_.nc')))
+    data_outfile = os.path.join(outdir, os.path.basename(datafile.replace('.nc', '_cor_fv2.nc')))
     save_corrected_dataset(dataset, corrected_tb, data_outfile)
 
     return corrected_tb
