@@ -262,6 +262,27 @@ def get_group_data(files, ir_var, hem, seasn, lat_window):
 
     return group_arrays_dict, data_ranges
 #----------------------------------------------
+def process_file(file, ir_var, surface_type_elements, lat_window):
+    data = xr.open_dataset(file)
+    lats = data['latitude'][:, :].data
+    brightness_temp_11um = data[ir_var].data
+    cloud_probability = data['cloud_probability'].data
+    surfact_type = data['land_class'].data
+
+    file_group_arrays_dict = {surface_type_id: [] for surface_type_id in surface_type_elements.keys()}
+
+    for surface_type_id in surface_type_elements.keys():
+        max_lat, min_lat = max(lat_window), min(lat_window)
+        mask = ((lats > min_lat) & (lats <= max_lat)) & \
+               (cloud_probability >= 0.5) & (surfact_type == surface_type_id)
+        mask = np.where((mask == True), 1, np.nan)
+        group_data = np.where(mask == 1, brightness_temp_11um, np.nan)
+
+        if not np.all(np.isnan(group_data)):
+            file_group_arrays_dict[surface_type_id].append(group_data)
+
+    return file_group_arrays_dict
+
 def get_group_data_parallel(files, ir_var, hem, seasn, lat_window):
     """
     Process a list of NetCDF files to extract and group infrared brightness temperature data 
@@ -281,27 +302,6 @@ def get_group_data_parallel(files, ir_var, hem, seasn, lat_window):
           the minimum and maximum brightness temperature values for each surface type.
     """
 
-    def process_file(file):
-        data = xr.open_dataset(file)
-        lats = data['latitude'][:, :].data
-        brightness_temp_11um = data[ir_var].data
-        cloud_probability = data['cloud_probability'].data
-        surfact_type = data['land_class'].data
-
-        file_group_arrays_dict = {surface_type_id: [] for surface_type_id in surface_type_elements.keys()}
-
-        for surface_type_id, surface_type_name in surface_type_elements.items():
-            max_lat, min_lat = max(lat_window), min(lat_window)
-            mask = ((lats > min_lat) & (lats <= max_lat)) & \
-                   (cloud_probability >= 0.5) & (surfact_type == surface_type_id)
-            mask = np.where((mask == True), 1, np.nan)
-            group_data = np.where(mask == 1, brightness_temp_11um, np.nan)
-
-            if not np.all(np.isnan(group_data)):
-                file_group_arrays_dict[surface_type_id].append(group_data)
-
-        return file_group_arrays_dict
-
     count = 0
     surface_type_elements = get_custom_surface_type_mapping(hem, seasn, lat_window)
     print(f"Processing {list(surface_type_elements.values())} data for {hem} hemisphere in {seasn} season")
@@ -310,7 +310,12 @@ def get_group_data_parallel(files, ir_var, hem, seasn, lat_window):
     data_ranges = {}
 
     with ProcessPoolExecutor(max_workers=5) as executor:
-        results = list(executor.map(process_file, sorted(files)))
+        results = list(executor.map(process_file, 
+                                    sorted(files), 
+                                    [ir_var]*len(files), 
+                                    [surface_type_elements]*len(files), 
+                                    [lat_window]*len(files), 
+                                    [cor_dir]*len(files)))
 
     for file_group_arrays_dict in results:
         for surface_type_id, group_arrays in file_group_arrays_dict.items():
@@ -1139,6 +1144,7 @@ def apply_lut_corrections_slow(datafile, beams, target_lat, tol, LUT):
 
     return corrected_tb
 
+#------------------------------------------
 
 def apply_lut_corrections_fast(datafile, lat_windows, LUT, outdir):
     """
