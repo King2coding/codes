@@ -1194,7 +1194,12 @@ def apply_lut_corrections_fast_v2(datafile, lat_windows, LUT, outdir):
 
         # Use ProcessPoolExecutor for parallel processing of valid indices
         with ProcessPoolExecutor(max_workers=10) as executor:
-            results = list(executor.map(process_index_helper, valid_indices, [brightness_temp]*len(valid_indices), [surfact_type]*len(valid_indices), [lat_wind_]*len(valid_indices), [LUT]*len(valid_indices)))
+            results = list(executor.map(process_index_helper, 
+                                        valid_indices, 
+                                        [brightness_temp]*len(valid_indices), 
+                                        [surfact_type]*len(valid_indices), 
+                                        [lat_wind_]*len(valid_indices), 
+                                        [LUT]*len(valid_indices)))
 
         # Update the corrected_tb array with the results
         for result in results:
