@@ -44,6 +44,31 @@ surface_type_mapping = {
     3: 'ice'
 }
 
+# Define latitude windows for Southern Hemisphere (SH) and Northern Hemisphere (NH)
+latitude_windows = {
+    'SH': {
+        'window1': (-75, -61),
+        'window2': (-61, -53)
+    },
+    'NH': {
+        'window1': (61, 75),
+        'window2': (53, 61)
+    }
+}
+
+
+# Define the combinations of latitude windows and seasons
+combinations = [
+    ('SH', 'Summer', latitude_windows['SH']['window1']),
+    ('SH', 'Summer', latitude_windows['SH']['window2']),
+    ('SH', 'Autumn', latitude_windows['SH']['window1']),
+    ('SH', 'Autumn', latitude_windows['SH']['window2']),
+    ('SH', 'Winter', latitude_windows['SH']['window1']),
+    ('SH', 'Winter', latitude_windows['SH']['window2']),
+    ('SH', 'Spring', latitude_windows['SH']['window1']),
+    ('SH', 'Spring', latitude_windows['SH']['window2'])
+]
+
 #%%
 # the fucntions
 # Customized surface type mapping based on hemisphere, season, and latitude range
@@ -262,6 +287,43 @@ def get_group_data(files, ir_var, hem, seasn, lat_window):
 
     return group_arrays_dict, data_ranges
 #----------------------------------------------
+
+def process_group_data_by_variable(variable_name, seasonal_files):
+    group_arrays_dict = {}
+    data_ranges = {}
+
+    # Loop through each combination and process the data
+    for hemisphere, season, lat_window in combinations:
+        if season in seasonal_files.keys():
+            season_files = seasonal_files[season]
+        
+            # Process SH data
+            key_sh = f"SH_{season}_{lat_window}"
+            group_arrays_dict[key_sh], data_ranges[key_sh] = get_group_data(
+                season_files, variable_name, 'SH', season, lat_window
+            )
+            
+            # Define corresponding NH data based on SH info
+            nh_season = {
+                'Summer': 'Winter',
+                'Autumn': 'Spring',
+                'Winter': 'Summer',
+                'Spring': 'Autumn'
+            }[season]
+            
+            # Determine the corresponding NH latitude window based on SH latitude window
+            sh_window_key = next(key for key, value in latitude_windows['SH'].items() if value == lat_window)
+            nh_lat_window = latitude_windows['NH'][sh_window_key]
+            
+            key_nh = f"NH_{nh_season}_{nh_lat_window}"
+            group_arrays_dict[key_nh], data_ranges[key_nh] = get_group_data(
+                season_files, variable_name, 'NH', nh_season, nh_lat_window
+            )
+    
+    return group_arrays_dict, data_ranges
+
+#----------------------------------------------
+
 def process_file(file, ir_var, surface_type_elements, lat_window):
     data = xr.open_dataset(file)
     lats = data['latitude'][:, :].data

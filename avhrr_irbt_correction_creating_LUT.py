@@ -5,8 +5,8 @@ from plot_functions import *
 
 #%%
 base_path = "/ra1/pubdat/AVHRR_CloudSat_proj/AVHRR/1998-2000/l2_subsets/1e132ab/noaa-14"  # Replace with your actual path
-df_dir = r'/home/kkumah/Projects/AVHRR_IR-TB_correction/results/df'
-plot_dir = r'/home/kkumah/Projects/AVHRR_IR-TB_correction/results/plots'
+df_dir = r'/home/kkumah/Projects/AVHRR_IR-TB_correction/results/df/Feb2025'
+plot_dir = r'/home/kkumah/Projects/AVHRR_IR-TB_correction/results/plots/Feb2025'
 cor_dir =r'/ra1/pubdat/AVHRR_CloudSat_proj/AVHRR/1998-2000/corrected'
 miscellaneous_dir = r'/home/kkumah/Projects/AVHRR_IR-TB_correction/miscellaneous'
 path_to_1998_n14_data = r'/ra1/pubdat/AVHRR_CloudSat_proj/AVHRR/frequency_analysis/data/avhrr/patmosx_l2_jan_1998/noaa-14/1998'
@@ -19,13 +19,17 @@ summer_data = r'/ra1/pubdat/AVHRR_CloudSat_proj/AVHRR_1998_summer_for_Kingsley'
 2: snow-covered land
 3: ice
 """
+# choose only 1 hemisphere
 hemisphere_sh = "Southern"  # Change to 'Northern' for the Northern Hemisphere
-hemisphere_sh = "Northern"  # Change to 'Northern' for the Northern Hemisphere
+# hemisphere_sh = "Northern"  # Change to 'Northern' for the Northern Hemisphere
 
 years = sorted([int(i) for i in os.listdir(base_path)])
 
 search_dir = os.path.join(base_path,str(years[0]))
 # Organize folders into seasons based on SH
+# Using the Southern Hemisphere (SH) to determine the seasons and corresponding files.
+# Note: The same files can be used to define the Northern Hemisphere (NH) seasons.
+# For example, summer in SH corresponds to winter in NH.
 seasons = organize_by_season_with_hemisphere(search_dir, hemisphere_sh, years[0])
 
 # Example: Load files for Summer
@@ -47,24 +51,19 @@ nc_files = [
     for filename in filenames if filename.endswith(".nc")
 ]
 
-sh_lat_wind, nh_lat_wind = (-75,-61), (61,75)
+# sh_lat_wind = latitude_windows['SH']['window1']
+# nh_lat_wind = latitude_windows['NH']['window1']
 
 #%%
 print('********* The group data *********')
 
 start_time = time.time()
 
-group_arrays_dict_sh, data_ranges_sh = get_group_data(summer_files,
-                                                      'temp_11_0um_nom', 
-                                                      'SH', 
-                                                      'Summer',
-                                                      sh_lat_wind)
+# Example usage for "temp_11_0um_nom"
+group_arrays_dict_11, data_ranges_11 = process_group_data_by_variable('temp_11_0um_nom', seasonal_files)
 
-group_arrays_dict_nh, data_ranges_nh = get_group_data(summer_files,
-                                                      'temp_11_0um_nom',
-                                                      'NH',
-                                                      'Winter',
-                                                      nh_lat_wind)
+# Example usage for "temp_12_0um_nom"
+group_arrays_dict_12, data_ranges_12 = process_group_data_by_variable('temp_12_0um_nom', seasonal_files)
 
 # End time of code
 end_time = time.time()
@@ -74,8 +73,8 @@ elapsed_minutes = elapsed_seconds / 60
 elapsed_hours = elapsed_seconds / 3600
 
 # Print results
-print(f"Elapsed time for getting limb stats: {elapsed_seconds:.2f} seconds "
-    f"({elapsed_minutes:.2f} minutes) ({elapsed_hours:.5f} hours)")
+print(f"Elapsed time for getting group data: {elapsed_seconds:.2f} seconds "
+      f"({elapsed_minutes:.2f} minutes) ({elapsed_hours:.5f} hours)")
 
 #%%
 print('********* The nadir stats *********')
