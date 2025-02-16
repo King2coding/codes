@@ -298,6 +298,7 @@ def process_group_data_by_variable(variable_name, seasonal_files):
             season_files = seasonal_files[season]
         
             # Process SH data
+            print(f"Processing {lat_window} window in {hemisphere} hemisphere in {season} season")
             key_sh = f"SH_{season}_{lat_window}"
             group_arrays_dict[key_sh], data_ranges[key_sh] = get_group_data(
                 season_files, variable_name, 'SH', season, lat_window
@@ -314,6 +315,8 @@ def process_group_data_by_variable(variable_name, seasonal_files):
             # Determine the corresponding NH latitude window based on SH latitude window
             sh_window_key = next(key for key, value in latitude_windows['SH'].items() if value == lat_window)
             nh_lat_window = latitude_windows['NH'][sh_window_key]
+
+            print(f"Processing {lat_window} window in {hemisphere} hemisphere in {season} season")
             
             key_nh = f"NH_{nh_season}_{nh_lat_window}"
             group_arrays_dict[key_nh], data_ranges[key_nh] = get_group_data(
