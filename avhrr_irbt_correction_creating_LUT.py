@@ -60,10 +60,14 @@ print('********* The group data *********')
 start_time = time.time()
 
 # Example usage for "temp_11_0um_nom"
-group_arrays_dict_11, data_ranges_11 = process_group_data_by_variable('temp_11_0um_nom', seasonal_files)
+group_arrays_dict_11, data_ranges_11 = process_group_data_by_variable(
+                                       
+                                       'temp_11_0um_nom', seasonal_files)
 
 # Example usage for "temp_12_0um_nom"
-group_arrays_dict_12, data_ranges_12 = process_group_data_by_variable('temp_12_0um_nom', seasonal_files)
+group_arrays_dict_12, data_ranges_12 = process_group_data_by_variable(
+                                       
+                                       'temp_12_0um_nom', seasonal_files)
 
 # End time of code
 end_time = time.time()
