@@ -316,7 +316,7 @@ def process_group_data_by_variable(variable_name, seasonal_files):
             sh_window_key = next(key for key, value in latitude_windows['SH'].items() if value == lat_window)
             nh_lat_window = latitude_windows['NH'][sh_window_key]
 
-            print(f"Processing {lat_window} window in {hemisphere} hemisphere in {season} season")
+            print(f"Processing {nh_lat_window} window in NH hemisphere in {nh_season} season")
             
             key_nh = f"NH_{nh_season}_{nh_lat_window}"
             group_arrays_dict[key_nh], data_ranges[key_nh] = get_group_data(
@@ -443,14 +443,25 @@ def process_nadir_stats_by_hem_season_lat_var(group_arrays_dict, data_ranges, co
     nh_nadir_bins_by_srftype, nh_nadir_hist_by_srftype, nh_all_nadirs_by_srftype = {}, {}, {}
 
     for hemisphere, season, lat_window in combinations:
-        key_sh = f"SH_{season}_{lat_window}"
-        key_nh = f"NH_{season}_{lat_window}"
-        
+        key_sh = f"SH_{season}_{lat_window}"        
         sh_nadir_bins_by_srftype[key_sh], sh_nadir_hist_by_srftype[key_sh], sh_all_nadirs_by_srftype[key_sh] = process_to_get_nadir_stats(
             group_arrays_dict[key_sh], 
             data_ranges[key_sh], 
             bin_size
         )
+
+        # Define corresponding NH data based on SH info
+        nh_season = {
+            'Summer': 'Winter',
+            'Autumn': 'Spring',
+            'Winter': 'Summer',
+            'Spring': 'Autumn'
+        }[season]
+        
+        # Determine the corresponding NH latitude window based on SH latitude window
+        sh_window_key = next(key for key, value in latitude_windows['SH'].items() if value == lat_window)
+        nh_lat_window = latitude_windows['NH'][sh_window_key]
+        key_nh = f"NH_{nh_season}_{nh_lat_window}"
 
         nh_nadir_bins_by_srftype[key_nh], nh_nadir_hist_by_srftype[key_nh], nh_all_nadirs_by_srftype[key_nh] = process_to_get_nadir_stats(
             group_arrays_dict[key_nh], 
@@ -580,8 +591,8 @@ def process_surface_type(surf_type, group_arrays, srf_type_data_ranges, srf_type
 #----------------------------------------------
 
 def process_to_get_limb_stats_fast(group_arrays_dict, data_ranges, 
-                              nadir_bins_by_srftype, nadir_hist_by_srftype, 
-                              lat_wind):
+                                   nadir_bins_by_srftype, nadir_hist_by_srftype, 
+                                   lat_wind):
 
     lookup_table_by_srftype = {}
     limb_hist_list_by_srftype = {}
@@ -620,6 +631,60 @@ def process_to_get_limb_stats_fast(group_arrays_dict, data_ranges,
 
 #----------------------------------------------
 
+def process_limb_stats_by_hem_season_lat_var(group_arrays_dict, data_ranges, nadir_bins_by_srftype, nadir_hist_by_srftype, combinations):
+    # Initialize dictionaries to store results
+    lookup_table_by_srftype_sh, limb_hist_list_by_srftype_sh, limb_bin_list_by_srftype_sh = {}, {}, {}
+    nadir_hist_list_by_srftype_sh, nadir_bin_list_by_srftype_sh, adjusted_limb_bins_list_by_srftype_sh = {}, {}, {}
+    all_limbs_at_i_list_by_srftype_sh = {}
+
+    lookup_table_by_srftype_nh, limb_hist_list_by_srftype_nh, limb_bin_list_by_srftype_nh = {}, {}, {}
+    nadir_hist_list_by_srftype_nh, nadir_bin_list_by_srftype_nh, adjusted_limb_bins_list_by_srftype_nh = {}, {}, {}
+    all_limbs_at_i_list_by_srftype_nh = {}
+
+    # Process limb stats for SH and NH
+    for hemisphere, season, lat_window in combinations:
+        key_sh = f"SH_{season}_{lat_window}"
+        
+        # Process SH data
+        (lookup_table_by_srftype_sh[key_sh], limb_hist_list_by_srftype_sh[key_sh], limb_bin_list_by_srftype_sh[key_sh], 
+         nadir_hist_list_by_srftype_sh[key_sh], nadir_bin_list_by_srftype_sh[key_sh], adjusted_limb_bins_list_by_srftype_sh[key_sh], 
+         all_limbs_at_i_list_by_srftype_sh[key_sh]) = process_to_get_limb_stats_fast(
+                                                             group_arrays_dict[key_sh], 
+                                                             data_ranges[key_sh], 
+                                                             nadir_bins_by_srftype[key_sh], 
+                                                             nadir_hist_by_srftype[key_sh], 
+                                                             lat_window)
+        
+        # Define corresponding NH data based on SH info
+        nh_season = {
+            'Summer': 'Winter',
+            'Autumn': 'Spring',
+            'Winter': 'Summer',
+            'Spring': 'Autumn'
+        }[season]
+        
+        # Determine the corresponding NH latitude window based on SH latitude window
+        sh_window_key = next(key for key, value in latitude_windows['SH'].items() if value == lat_window)
+        nh_lat_window = latitude_windows['NH'][sh_window_key]
+        key_nh = f"NH_{nh_season}_{nh_lat_window}"
+
+        # Process NH data
+        (lookup_table_by_srftype_nh[key_nh], limb_hist_list_by_srftype_nh[key_nh], limb_bin_list_by_srftype_nh[key_nh],
+         nadir_hist_list_by_srftype_nh[key_nh], nadir_bin_list_by_srftype_nh[key_nh], adjusted_limb_bins_list_by_srftype_nh[key_nh],
+         all_limbs_at_i_list_by_srftype_nh[key_nh]) = process_to_get_limb_stats_fast(
+                                                                    group_arrays_dict[key_nh],
+                                                                    data_ranges[key_nh],
+                                                                    nadir_bins_by_srftype[key_nh],
+                                                                    nadir_hist_by_srftype[key_nh],
+                                                                    nh_lat_window)
+
+    return (lookup_table_by_srftype_sh, limb_hist_list_by_srftype_sh, limb_bin_list_by_srftype_sh, 
+            nadir_hist_list_by_srftype_sh, nadir_bin_list_by_srftype_sh, adjusted_limb_bins_list_by_srftype_sh, 
+            all_limbs_at_i_list_by_srftype_sh, lookup_table_by_srftype_nh, limb_hist_list_by_srftype_nh, 
+            limb_bin_list_by_srftype_nh, nadir_hist_list_by_srftype_nh, nadir_bin_list_by_srftype_nh, 
+            adjusted_limb_bins_list_by_srftype_nh, all_limbs_at_i_list_by_srftype_nh)
+
+#----------------------------------------------
 def create_histogram_of_histogram(binss,hists):
     bin_edges = np.linspace(binss.min(), binss.max(), 100)  # Adjust number of bins
     binned_hist, _, _ = binned_statistic(binss, hists, 

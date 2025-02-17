@@ -86,20 +86,34 @@ print('********* The nadir stats *********')
 # start time of code
 start_time = time.time()
 
-sh_nadir_bins_by_srftype, sh_nadir_hist_by_srftype, sh_all_nadirs_by_srftype = process_to_get_nadir_stats(
-    group_arrays_dict_sh, 
-    data_ranges_sh, 
-    bin_size
-)
+# Example usage for "temp_11_0um_nom"
+(sh_nadir_bins_by_srftype_11, sh_nadir_hist_by_srftype_11, sh_all_nadirs_by_srftype_11,
+nh_nadir_bins_by_srftype_11, nh_nadir_hist_by_srftype_11, nh_all_nadirs_by_srftype_11) = process_nadir_stats_by_hem_season_lat_var(
+                                                                                         group_arrays_dict_11, 
+                                                                                         data_ranges_11, 
+                                                                                         combinations, 
+                                                                                         bin_size
+                                                                                        )
 
-nh_nadir_bins_by_srftype, nh_nadir_hist_by_srftype, nh_all_nadirs_by_srftype = process_to_get_nadir_stats(
-    group_arrays_dict_nh, 
-    data_ranges_nh, 
-    bin_size
-)
+# Example usage for "temp_12_0um_nom"
+(sh_nadir_bins_by_srftype_12, sh_nadir_hist_by_srftype_12, sh_all_nadirs_by_srftype_12,
+nh_nadir_bins_by_srftype_12, nh_nadir_hist_by_srftype_12, nh_all_nadirs_by_srftype_12) = process_nadir_stats_by_hem_season_lat_var(
+                                                                                         group_arrays_dict_12, 
+                                                                                         data_ranges_12, 
+                                                                                         combinations, 
+                                                                                         bin_size
+                                                                                        )
 
-print(f"Elapsed time for getting limb stats: {elapsed_seconds:.2f} seconds "
-    f"({elapsed_minutes:.2f} minutes) ({elapsed_hours:.5f} hours)")
+# End time of code
+end_time = time.time()
+# Compute elapsed time
+elapsed_seconds = end_time - start_time
+elapsed_minutes = elapsed_seconds / 60
+elapsed_hours = elapsed_seconds / 3600
+
+# Print results
+print(f"Elapsed time for getting nadir stats: {elapsed_seconds:.2f} seconds "
+      f"({elapsed_minutes:.2f} minutes) ({elapsed_hours:.5f} hours)")
 
 #%%
 print('********* The limb stats *********')
@@ -107,24 +121,23 @@ print('********* The limb stats *********')
 # # start time of code
 start_time = time.time()
 
-(lookup_table_by_srftype_sh, limb_hist_list_by_srftype_sh, limb_bin_list_by_srftype_sh, 
- nadir_hist_list_by_srftype_sh, nadir_bin_list_by_srftype_sh, adjusted_limb_bins_list_by_srftype_sh, 
- all_limbs_at_i_list_by_srftype_sh) = process_to_get_limb_stats_fast(
-                                                         group_arrays_dict_sh, 
-                                                         data_ranges_sh, 
-                                                         sh_nadir_bins_by_srftype, 
-                                                         sh_nadir_hist_by_srftype, 
-                                                         sh_lat_wind)
 
-#--------------------------------------------------------
-(lookup_table_by_srftype_nh, limb_hist_list_by_srftype_nh, limb_bin_list_by_srftype_nh,
- nadir_hist_list_by_srftype_nh, nadir_bin_list_by_srftype_nh, adjusted_limb_bins_list_by_srftype_nh,
- all_limbs_at_i_list_by_srftype_nh) = process_to_get_limb_stats_fast(
-                                                                group_arrays_dict_nh,
-                                                                data_ranges_nh,
-                                                                nh_nadir_bins_by_srftype,
-                                                                nh_nadir_hist_by_srftype,
-                                                                nh_lat_wind)
+# Example usage for "temp_11_0um_nom"
+(lookup_table_by_srftype_sh_11, limb_hist_list_by_srftype_sh_11, limb_bin_list_by_srftype_sh_11, 
+ nadir_hist_list_by_srftype_sh_11, nadir_bin_list_by_srftype_sh_11, adjusted_limb_bins_list_by_srftype_sh_11, 
+ all_limbs_at_i_list_by_srftype_sh_11, lookup_table_by_srftype_nh_11, limb_hist_list_by_srftype_nh_11, 
+ limb_bin_list_by_srftype_nh_11, nadir_hist_list_by_srftype_nh_11, nadir_bin_list_by_srftype_nh_11, 
+ adjusted_limb_bins_list_by_srftype_nh_11, all_limbs_at_i_list_by_srftype_nh_11) = process_limb_stats_by_hem_season_lat_var(
+    group_arrays_dict_11, data_ranges_11, sh_nadir_bins_by_srftype_11, sh_nadir_hist_by_srftype_11, combinations)
+
+# Example usage for "temp_12_0um_nom"
+(lookup_table_by_srftype_sh_12, limb_hist_list_by_srftype_sh_12, limb_bin_list_by_srftype_sh_12, 
+ nadir_hist_list_by_srftype_sh_12, nadir_bin_list_by_srftype_sh_12, adjusted_limb_bins_list_by_srftype_sh_12, 
+ all_limbs_at_i_list_by_srftype_sh_12, lookup_table_by_srftype_nh_12, limb_hist_list_by_srftype_nh_12, 
+ limb_bin_list_by_srftype_nh_12, nadir_hist_list_by_srftype_nh_12, nadir_bin_list_by_srftype_nh_12, 
+ adjusted_limb_bins_list_by_srftype_nh_12, all_limbs_at_i_list_by_srftype_nh_12) = process_limb_stats_by_hem_season_lat_var(
+    group_arrays_dict_12, data_ranges_12, nh_nadir_bins_by_srftype_12, nh_nadir_hist_by_srftype_12, combinations)
+
 # End time of code
 end_time = time.time()
 # Compute elapsed time
@@ -133,7 +146,7 @@ elapsed_minutes = elapsed_seconds / 60
 elapsed_hours = elapsed_seconds / 3600
 # Print results
 print(f"Elapsed time for getting limb stats: {elapsed_seconds:.2f} seconds "
-    f"({elapsed_minutes:.2f} minutes) ({elapsed_hours:.5f} hours)")    
+    f"({elapsed_minutes:.2f} minutes) ({elapsed_hours:.5f} hours)")
                        
 
 #%%
