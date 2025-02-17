@@ -11,6 +11,7 @@ cor_dir =r'/ra1/pubdat/AVHRR_CloudSat_proj/AVHRR/1998-2000/corrected'
 miscellaneous_dir = r'/home/kkumah/Projects/AVHRR_IR-TB_correction/miscellaneous'
 path_to_1998_n14_data = r'/ra1/pubdat/AVHRR_CloudSat_proj/AVHRR/frequency_analysis/data/avhrr/patmosx_l2_jan_1998/noaa-14/1998'
 summer_data = r'/ra1/pubdat/AVHRR_CloudSat_proj/AVHRR_1998_summer_for_Kingsley'
+all_noaa_data = r'/ra1/pubdat/AVHRR_CloudSat_proj/AVHRR_AutoSnow_collocated_1998_2000_for_Kingsley'
 #%%
 # floating variables
 """
@@ -19,29 +20,42 @@ summer_data = r'/ra1/pubdat/AVHRR_CloudSat_proj/AVHRR_1998_summer_for_Kingsley'
 2: snow-covered land
 3: ice
 """
-# choose only 1 hemisphere
-hemisphere_sh = "Southern"  # Change to 'Northern' for the Northern Hemisphere
-# hemisphere_sh = "Northern"  # Change to 'Northern' for the Northern Hemisphere
+# Select 1998 NOAA-14 files identified by "NJ" in the file name
+all_noaa_files = sorted([
+    os.path.join(all_noaa_data, s) 
+    for s in os.listdir(all_noaa_data) 
+    if s.endswith('.nc') and "NJ" in s and "D98" in s
+])
 
-years = sorted([int(i) for i in os.listdir(base_path)])
+# organize file by seasons and hemisphere
 
-search_dir = os.path.join(base_path,str(years[0]))
-# Organize folders into seasons based on SH
-# Using the Southern Hemisphere (SH) to determine the seasons and corresponding files.
-# Note: The same files can be used to define the Northern Hemisphere (NH) seasons.
-# For example, summer in SH corresponds to winter in NH.
-seasons = organize_by_season_with_hemisphere(search_dir, hemisphere_sh, years[0])
 
-# Example: Load files for Summer
-# summer_files = load_files_for_season(search_dir, seasons["Summer"])
+# Organize files by season and hemisphere
+seasonal_files = organize_files_by_season_in_hemisphere(all_noaa_files,'SH',1998)
 
-seasonal_files = {}
-for season in seasons.keys():
-    seasonal_files[season] = load_files_for_season(search_dir, seasons[season])
+# # choose only 1 hemisphere
+# hemisphere_sh = "Southern"  # Change to 'Northern' for the Northern Hemisphere
+# # hemisphere_sh = "Northern"  # Change to 'Northern' for the Northern Hemisphere
 
-summer_files = [os.path.join(summer_data,s) for s in os.listdir(summer_data) if s.endswith('.nc')] 
+# years = sorted([int(i) for i in os.listdir(base_path)])
 
-file2run = next((f for f in summer_files if "clavrx_NSS.GHRR.NJ.D98015.S1728.E1912.B156" in f), None)
+# search_dir = os.path.join(base_path,str(years[0]))
+# # Organize folders into seasons based on SH
+# # Using the Southern Hemisphere (SH) to determine the seasons and corresponding files.
+# # Note: The same files can be used to define the Northern Hemisphere (NH) seasons.
+# # For example, summer in SH corresponds to winter in NH.
+# seasons = organize_by_season_with_hemisphere(search_dir, hemisphere_sh, years[0])
+
+# # Example: Load files for Summer
+# # summer_files = load_files_for_season(search_dir, seasons["Summer"])
+
+# seasonal_files = {}
+# for season in seasons.keys():
+#     seasonal_files[season] = load_files_for_season(search_dir, seasons[season])
+
+# summer_files = [os.path.join(summer_data,s) for s in os.listdir(summer_data) if s.endswith('.nc')] 
+
+file2run = next((f for f in all_noaa_files if "clavrx_NSS.GHRR.NJ.D98015.S1728.E1912.B156" in f), None)
 
 cde_run_dte = str(date.today().strftime('%Y%m%d'))
 
@@ -60,12 +74,12 @@ print('********* The group data *********')
 start_time = time.time()
 
 # Example usage for "temp_11_0um_nom"
-group_arrays_dict_11, data_ranges_11 = process_group_data_by_variable(
-                                       
+group_arrays_dict_11, data_ranges_11 = process_group_data_by_hem_seaon_lat_var(
+                                           
                                        'temp_11_0um_nom', seasonal_files)
 
 # Example usage for "temp_12_0um_nom"
-group_arrays_dict_12, data_ranges_12 = process_group_data_by_variable(
+group_arrays_dict_12, data_ranges_12 = process_group_data_by_hem_seaon_lat_var(
                                        
                                        'temp_12_0um_nom', seasonal_files)
 

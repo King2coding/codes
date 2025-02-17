@@ -140,7 +140,41 @@ def find_season(month, hemisphere):
         print('Invalid selection. Please select a hemisphere and try again')
 #----------------------------------------------
 
-# Function to calculate the month from DOY
+def organize_files_by_season_in_hemisphere(file_list, hemisphere='SH', year=2023):
+    """
+    Organize files by season based on the day of the year and hemisphere.
+    
+    Parameters:
+    file_list (list): List of file paths to be organized.
+    hemisphere (str): Hemisphere to organize files by ('SH' for Southern Hemisphere, 'NH' for Northern Hemisphere).
+    year (int): Year to calculate the month from the day of the year.
+    
+    Returns:
+    dict: Dictionary with seasons as keys and lists of file paths as values.
+    """
+    # Initialize a dictionary to store files by season
+    seasonal_files = {'Summer': [], 'Autumn': [], 'Winter': [], 'Spring': []}
+
+    # Check if the year is a leap year
+    is_leap_year = (year % 4 == 0 and year % 100 != 0) or (year % 400 == 0)
+
+    # Iterate over each file in the list
+    for file in file_list:
+        # Extract the day of the year from the file name
+        day_of_year = int(file.split('D98')[1][:3])
+        # Adjust for leap year if necessary
+        if is_leap_year and day_of_year > 59:
+            day_of_year -= 1
+        # Calculate the month from the day of the year
+        month = calculate_month(day_of_year, year)
+        # Determine the season for the given month and hemisphere
+        season = find_season(month, 'Southern' if hemisphere == 'SH' else 'Northern')
+        # Append the file to the corresponding season list
+        seasonal_files[season].append(file)
+    
+    return seasonal_files
+#----------------------------------------------
+# Function to calculate the month from day of year
 def calculate_month(doy, year):
     """Calculate the month from DOY (day of year)."""
     date = datetime.datetime(year, 1, 1) + datetime.timedelta(doy - 1)
@@ -288,7 +322,7 @@ def get_group_data(files, ir_var, hem, seasn, lat_window):
     return group_arrays_dict, data_ranges
 #----------------------------------------------
 
-def process_group_data_by_variable(variable_name, seasonal_files):
+def process_group_data_by_hem_seaon_lat_var(variable_name, seasonal_files):
     group_arrays_dict = {}
     data_ranges = {}
 
