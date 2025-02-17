@@ -322,22 +322,22 @@ def get_group_data(files, ir_var, hem, seasn, lat_window):
     return group_arrays_dict, data_ranges
 #----------------------------------------------
 
-def process_group_data_by_hem_seaon_lat_var(variable_name, seasonal_files):
+def process_combination(hemisphere, season, lat_window, season_files, variable_name):
+    key = f"{hemisphere}_{season}_{lat_window}"
+    group_arrays, data_range = get_group_data(season_files, variable_name, hemisphere, season, lat_window)
+    return key, group_arrays, data_range
+
+def process_group_data_by_hem_season_lat_var(variable_name, seasonal_files):
     group_arrays_dict = {}
     data_ranges = {}
 
-    # Loop through each combination and process the data
+    # Prepare tasks for parallel processing
+    tasks = []
     for hemisphere, season, lat_window in combinations:
         if season in seasonal_files.keys():
             season_files = seasonal_files[season]
-        
-            # Process SH data
-            print(f"Processing {lat_window} window in {hemisphere} hemisphere in {season} season")
-            key_sh = f"SH_{season}_{lat_window}"
-            group_arrays_dict[key_sh], data_ranges[key_sh] = get_group_data(
-                season_files, variable_name, 'SH', season, lat_window
-            )
-            
+            tasks.append((hemisphere, season, lat_window, season_files, variable_name))
+
             # Define corresponding NH data based on SH info
             nh_season = {
                 'Summer': 'Winter',
@@ -349,15 +349,21 @@ def process_group_data_by_hem_seaon_lat_var(variable_name, seasonal_files):
             # Determine the corresponding NH latitude window based on SH latitude window
             sh_window_key = next(key for key, value in latitude_windows['SH'].items() if value == lat_window)
             nh_lat_window = latitude_windows['NH'][sh_window_key]
+            tasks.append(('NH', nh_season, nh_lat_window, season_files, variable_name))
 
-            print(f"Processing {nh_lat_window} window in NH hemisphere in {nh_season} season")
-            
-            key_nh = f"NH_{nh_season}_{nh_lat_window}"
-            group_arrays_dict[key_nh], data_ranges[key_nh] = get_group_data(
-                season_files, variable_name, 'NH', nh_season, nh_lat_window
-            )
-    
+    # Process tasks in parallel
+    with ProcessPoolExecutor(max_workers=4) as executor:
+        results = list(executor.map(process_combination_wrapper, tasks))
+
+    # Collect results
+    for key, group_arrays, data_range in results:
+        group_arrays_dict[key] = group_arrays
+        data_ranges[key] = data_range
+
     return group_arrays_dict, data_ranges
+
+def process_combination_wrapper(args):
+    return process_combination(*args)
 
 #----------------------------------------------
 
