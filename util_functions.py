@@ -438,6 +438,30 @@ def process_to_get_nadir_stats(group_arrays_dict, data_ranges, bin_size):
     return nadir_bins_by_srftype, nadir_hist_by_srftype, all_nadirs_by_srftype
 
 #----------------------------------------------
+def process_nadir_stats_by_hem_season_lat_var(group_arrays_dict, data_ranges, combinations, bin_size):
+    sh_nadir_bins_by_srftype, sh_nadir_hist_by_srftype, sh_all_nadirs_by_srftype = {}, {}, {}
+    nh_nadir_bins_by_srftype, nh_nadir_hist_by_srftype, nh_all_nadirs_by_srftype = {}, {}, {}
+
+    for hemisphere, season, lat_window in combinations:
+        key_sh = f"SH_{season}_{lat_window}"
+        key_nh = f"NH_{season}_{lat_window}"
+        
+        sh_nadir_bins_by_srftype[key_sh], sh_nadir_hist_by_srftype[key_sh], sh_all_nadirs_by_srftype[key_sh] = process_to_get_nadir_stats(
+            group_arrays_dict[key_sh], 
+            data_ranges[key_sh], 
+            bin_size
+        )
+
+        nh_nadir_bins_by_srftype[key_nh], nh_nadir_hist_by_srftype[key_nh], nh_all_nadirs_by_srftype[key_nh] = process_to_get_nadir_stats(
+            group_arrays_dict[key_nh], 
+            data_ranges[key_nh], 
+            bin_size
+        )
+
+    return (sh_nadir_bins_by_srftype, sh_nadir_hist_by_srftype, sh_all_nadirs_by_srftype,
+            nh_nadir_bins_by_srftype, nh_nadir_hist_by_srftype, nh_all_nadirs_by_srftype)
+
+#----------------------------------------------
 
 def get_limb_bins_and_histogram(group_data, bm_pos, data_range):
     all_limbs_at_i = get_elements_limb(group_data, bm_pos)
