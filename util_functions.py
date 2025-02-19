@@ -370,6 +370,7 @@ def process_group_data_by_hemisphere_season_latitude_v2(variable_name, season_fi
                 data_ranges[lat_key][surface_type_id] = (data_min, data_max)
             else:
                 data_ranges[lat_key][surface_type_id] = (None, None)
+    del(lat_key, group_arrays, surface_type_id, arrays)
 
     return group_arrays_dict, data_ranges
 

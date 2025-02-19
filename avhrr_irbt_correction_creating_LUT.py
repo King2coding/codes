@@ -84,28 +84,28 @@ print(f"Processing season: {season} with {len(season_files)} files")
 group_array_dict_elements_11[season] = process_group_data_by_hemisphere_season_latitude_v2(
                                    'temp_11_0um_nom', season_files, season)
 print(f"Completed processing for season: {season}")
-
+#%%
 season = 'Winter'
 season_files = seasonal_files[season]
 print(f"Processing season: {season} with {len(season_files)} files")
 group_array_dict_elements_11[season] = process_group_data_by_hemisphere_season_latitude_v2(
                                    'temp_11_0um_nom', season_files, season)
 print(f"Completed processing for season: {season}")
-
+#%%
 season = 'Spring'
 season_files = seasonal_files[season]
 print(f"Processing season: {season} with {len(season_files)} files")
 group_array_dict_elements_11[season] = process_group_data_by_hemisphere_season_latitude_v2(
                                    'temp_11_0um_nom', season_files, season)
 print(f"Completed processing for season: {season}")
-
+#%%
 season = 'Autumn'
 season_files = seasonal_files[season]
 print(f"Processing season: {season} with {len(season_files)} files")
 group_array_dict_elements_11[season] = process_group_data_by_hemisphere_season_latitude_v2(
                                    'temp_11_0um_nom', season_files, season)
 print(f"Completed processing for season: {season}")
-    
+#%%
 # print('processing group data for temp_12_0um_nom')    
 # group_array_dict_elements_12 = {}
 # for sees in seasonal_files.keys():
