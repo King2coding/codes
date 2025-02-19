@@ -7,6 +7,7 @@ functions used globally
 # import packages
 import warnings
 warnings.filterwarnings("ignore")
+import gc
 import os
 import datetime
 from datetime import date
@@ -356,6 +357,10 @@ def process_group_data_by_hemisphere_season_latitude_v2(variable_name, season_fi
         processed_files += 1
         if processed_files % 400 == 0:
             print(f"Processed {processed_files}/{total_files} files ({(processed_files / total_files) * 100:.2f}%)")
+
+    del (total_files, processed_files, sh_season, nh_season, file, data, lats, brightness_temp, cld_probability, surfact_type,
+         window_key, sh_window_range, sh_max_lat, sh_min_lat, sh_surface_type_elements, sh_lat_key,
+         nh_window_range, nh_max_lat, nh_min_lat, nh_surface_type_elements, nh_lat_key)
 
     for lat_key, group_arrays in group_arrays_dict.items():
         for surface_type_id, arrays in group_arrays.items():
