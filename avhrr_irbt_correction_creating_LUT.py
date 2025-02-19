@@ -73,15 +73,21 @@ print('********* The group data *********')
 
 start_time = time.time()
 
-# Example usage for "temp_11_0um_nom"
-group_arrays_dict_11, data_ranges_11 = process_group_data_by_hem_season_lat_var(
+print('processing group data for temp_11_0um_nom')
+group_array_dict_elements_11 = {}
+for sees in seasonal_files.keys():
+    season_files = seasonal_files[sees]
+    group_array_dict_elements_11[sees] = process_group_data_by_hemisphere_season_latitude_v2(
                                            
-                                       'temp_11_0um_nom', seasonal_files)
-
-# Example usage for "temp_12_0um_nom"
-group_arrays_dict_12, data_ranges_12 = process_group_data_by_hem_season_lat_var(
+                                       'temp_11_0um_nom', season_files, sees)
+    
+print('processing group data for temp_12_0um_nom')    
+group_array_dict_elements_12 = {}
+for sees in seasonal_files.keys():
+    season_files = seasonal_files[sees]
+    group_array_dict_elements_12[sees] = process_group_data_by_hemisphere_season_latitude_v2(
                                        
-                                       'temp_12_0um_nom', seasonal_files)
+                                       'temp_12_0um_nom', seasonal_files, sees)
 
 # End time of code
 end_time = time.time()

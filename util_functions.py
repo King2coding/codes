@@ -307,7 +307,7 @@ def process_group_data_by_hemisphere_season_latitude_v2(variable_name, season_fi
     """
     group_arrays_dict = {}
     data_ranges = {}
-    total_files = sum(len(files) for files in season_files.values())
+    total_files = len(season_files)
     processed_files = 0
     sh_season = season
     # Define corresponding NH data based on SH info
@@ -481,7 +481,6 @@ def process_group_data_by_hem_season_lat_var(variable_name, seasonal_files):
             data_ranges[key_nh] = data_range
 
     return group_arrays_dict, data_ranges
-
 #----------------------------------------------
 
 def process_file(file, ir_var, surface_type_elements, lat_window):
