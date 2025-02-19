@@ -265,6 +265,111 @@ def create_histogram(temp_values, bin_size, temp_range):
     return hist, bin_edges[:-1]
 #----------------------------------------------
 
+def grab_group_data(lat_key, 
+                    surf_type_data, surface_type_elements, 
+                    lats, min_lat, max_lat, cld_prob, bt_data,
+                    group_array_dict):             
+    for surface_type_id in surface_type_elements.keys():
+        mask = ((lats > min_lat) & (lats <= max_lat)) & \
+            (cld_prob >= 0.5) & (surf_type_data == surface_type_id)
+        
+        mask = np.where((mask == True), 1, np.nan)
+        
+        bt_group_data = np.where(mask == 1, bt_data, np.nan)
+
+        if not np.all(np.isnan(bt_group_data)):
+            group_array_dict[lat_key][surface_type_id].append(bt_group_data)
+#----------------------------------------------
+def process_group_data_by_hemisphere_season_latitude_v2(variable_name, season_files, season):
+    """
+    Process group data by hemisphere, season, and latitude variable.
+    This function processes data files grouped by hemisphere, season, and latitude window.
+    It generates group arrays and data ranges for each combination of hemisphere, season, 
+    and latitude window, including corresponding Northern Hemisphere data based on Southern 
+    Hemisphere information.
+    
+    Args:
+        variable_name (str): The name of the variable to process.
+        seasonal_files (dict): A dictionary where keys are seasons and values are lists of file paths.
+    
+    Returns:
+        tuple: A tuple containing:
+            - group_arrays_dict (dict): A dictionary where keys are combinations of hemisphere, 
+              season, and latitude window, and values are the corresponding group arrays.
+            - data_ranges (dict): A dictionary where keys are combinations of hemisphere, 
+              season, and latitude window, and values are the corresponding data ranges.
+    
+    Notes:
+        - The function assumes that the `combinations` variable is defined elsewhere in the code.
+        - The function assumes that the `get_custom_surface_type_mapping` function is defined elsewhere in the code.
+        - The function assumes that the `latitude_windows` dictionary is defined elsewhere in the code.
+        - Print statements are included to provide interactive feedback during processing.
+    """
+    group_arrays_dict = {}
+    data_ranges = {}
+    total_files = sum(len(files) for files in season_files.values())
+    processed_files = 0
+    sh_season = season
+    # Define corresponding NH data based on SH info
+    nh_season = {
+        'Summer': 'Winter',
+        'Autumn': 'Spring',
+        'Winter': 'Summer',
+        'Spring': 'Autumn'
+    }[sh_season]
+
+    for file in sorted(season_files):
+        data = xr.open_dataset(file)
+        lats = data['latitude'][:, :].data
+        brightness_temp = data[variable_name].data
+        cld_probability = data['cloud_probability'].data
+        surfact_type = data['land_class'].data
+
+        for window_key in latitude_windows['SH'].keys():
+            sh_window_range = latitude_windows['SH'][window_key]
+            sh_max_lat, sh_min_lat = max(sh_window_range), min(sh_window_range)
+            sh_surface_type_elements = get_custom_surface_type_mapping('SH', sh_season, sh_window_range)
+            sh_lat_key = f"{'SH'}_{sh_season}_{sh_window_range}"
+
+            nh_window_range = latitude_windows['NH'][window_key]
+            nh_max_lat, nh_min_lat = max(nh_window_range), min(nh_window_range)
+            nh_surface_type_elements = get_custom_surface_type_mapping('NH', nh_season, nh_window_range)
+            nh_lat_key = f"{'NH'}_{nh_season}_{nh_window_range}"
+            
+            if sh_lat_key not in group_arrays_dict:
+                    group_arrays_dict[sh_lat_key] = {surface_type_id: [] for surface_type_id in sh_surface_type_elements.keys()}
+                    data_ranges[sh_lat_key] = {surface_type_id: [] for surface_type_id in sh_surface_type_elements.keys()}
+
+            if nh_lat_key not in group_arrays_dict:
+                group_arrays_dict[nh_lat_key] = {surface_type_id: [] for surface_type_id in nh_surface_type_elements.keys()}
+                data_ranges[nh_lat_key] = {surface_type_id: [] for surface_type_id in nh_surface_type_elements.keys()}
+
+            grab_group_data(sh_lat_key, surfact_type, sh_surface_type_elements, 
+                                                lats, sh_min_lat, sh_max_lat, cld_probability, 
+                                                brightness_temp, group_arrays_dict)
+            
+            grab_group_data(nh_lat_key, surfact_type, nh_surface_type_elements, 
+                                                lats, nh_min_lat, nh_max_lat, cld_probability, 
+                                                brightness_temp, group_arrays_dict)                
+
+        data.close()
+        processed_files += 1
+        if processed_files % 400 == 0:
+            print(f"Processed {processed_files}/{total_files} files ({(processed_files / total_files) * 100:.2f}%)")
+
+    for lat_key, group_arrays in group_arrays_dict.items():
+        for surface_type_id, arrays in group_arrays.items():
+            if arrays:
+                data_min = min(np.nanmin(i) for i in arrays)
+                data_max = max(np.nanmax(i) for i in arrays)
+                data_ranges[lat_key][surface_type_id] = (data_min, data_max)
+            else:
+                data_ranges[lat_key][surface_type_id] = (None, None)
+
+    return group_arrays_dict, data_ranges
+
+#----------------------------------------------
+
 def get_group_data(files, ir_var, hem, seasn, lat_window):
     """
     Process a list of NetCDF files to extract and group infrared brightness temperature data 
@@ -290,6 +395,8 @@ def get_group_data(files, ir_var, hem, seasn, lat_window):
     group_arrays_dict = {surface_type_id: [] for surface_type_id in surface_type_elements.keys()}
     data_ranges = {}
 
+    max_lat, min_lat = max(lat_window), min(lat_window)
+
     for file in sorted(files):
         data = xr.open_dataset(file)
         lats = data['latitude'][:, :].data
@@ -298,7 +405,7 @@ def get_group_data(files, ir_var, hem, seasn, lat_window):
         surfact_type = data['land_class'].data
 
         for surface_type_id, surface_type_name in surface_type_elements.items():
-            max_lat, min_lat = max(lat_window), min(lat_window)
+            
             mask = ((lats > min_lat) & (lats <= max_lat)) & \
                    (cloud_probability >= 0.5) & (surfact_type == surface_type_id)
             mask = np.where((mask == True), 1, np.nan)
@@ -308,7 +415,7 @@ def get_group_data(files, ir_var, hem, seasn, lat_window):
                 group_arrays_dict[surface_type_id].append(group_data)
 
         count += 1
-        if count % 100 == 0:
+        if count % 400 == 0:
             print(f"Processed {count}/{len(files)} ({(count / len(files)) * 100:.2f}%) of the total {len(files)} files")
 
     for surface_type_id, group_arrays in group_arrays_dict.items():
@@ -351,7 +458,7 @@ def process_group_data_by_hem_season_lat_var(variable_name, seasonal_files):
         if season in seasonal_files.keys():
             season_files = seasonal_files[season]
             key = f"{hemisphere}_{season}_{lat_window}"
-            print(f"Processing {key} with {len(season_files)} files...")
+            # print(f"Processing {key} with {len(season_files)} files...")
             group_arrays, data_range = get_group_data(season_files, variable_name, hemisphere, season, lat_window)
             group_arrays_dict[key] = group_arrays
             data_ranges[key] = data_range
@@ -368,7 +475,7 @@ def process_group_data_by_hem_season_lat_var(variable_name, seasonal_files):
             sh_window_key = next(key for key, value in latitude_windows['SH'].items() if value == lat_window)
             nh_lat_window = latitude_windows['NH'][sh_window_key]
             key_nh = f"NH_{nh_season}_{nh_lat_window}"
-            print(f"Processing {key_nh} with {len(season_files)} files...")
+            # print(f"Processing {key_nh} with {len(season_files)} files...")
             group_arrays, data_range = get_group_data(season_files, variable_name, 'NH', nh_season, nh_lat_window)
             group_arrays_dict[key_nh] = group_arrays
             data_ranges[key_nh] = data_range
