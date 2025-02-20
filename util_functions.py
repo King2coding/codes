@@ -7,6 +7,7 @@ functions used globally
 # import packages
 import warnings
 warnings.filterwarnings("ignore")
+import sys
 import gc
 import os
 import datetime
@@ -86,7 +87,8 @@ def get_custom_surface_type_mapping(hemisphere, season, lat_range):
             }
         elif (season in ['Summer', 'Spring']) and (lat_range == (-61, -53)):
             return {
-                0: 'water',                
+                0: 'water',
+                1: 'snow-free land'
             }
         elif (season in ['Autumn', 'Winter']) and (lat_range == (-61, -53)):
             return {
@@ -104,22 +106,55 @@ def get_custom_surface_type_mapping(hemisphere, season, lat_range):
         elif (season in ['Spring', 'Summer']) and (lat_range == (61, 75)):
             return {
                 0: 'water',
-                2: 'snow-free land',                
+                1: 'snow-free land'
             }
         
         elif (season in ['Spring', 'Summer']) and (lat_range == (53, 61)):
             return {
                 0: 'water',
-                2: 'snow-free land',                
+                1: 'snow-free land'
             }
         
         elif (season in ['Winter', 'Autumn']) and (lat_range == (53, 61)):
             return {
                 0: 'water',
-                2: 'snow-covered land',    
-                3: 'ice'            
-            }       
-#----------------------------------------------   
+                2: 'snow-covered land',
+                3: 'ice'
+            }
+#---------------------------------------------- 
+#*************  ✨ Codeium Command 🌟  *************/
+def nonnan_to_df(array):
+    """
+    Convert a 2D NumPy array to a Pandas DataFrame, 
+    with only non-NaN values and their indices.
+
+    Parameters
+    ----------
+    array : 2D NumPy array
+        The array to be converted.
+
+    Returns
+    -------
+    df : Pandas DataFrame
+        A DataFrame with non-NaN values and their indices.
+    """
+    # Get the indices of non-NaN values
+    indices = np.argwhere(~np.isnan(array))
+    
+    # Create a DataFrame with the non-NaN values and their indices
+    df = pd.DataFrame({
+        'value': array[indices[:, 0], indices[:, 1]],
+        'row': indices[:, 0],
+        'col': indices[:, 1]
+    })
+    
+    # Set the row and column indices as the index and columns of the DataFrame
+    df = df.set_index(['row', 'col'])
+    
+    return df
+
+#******  9d3842aa-3e2e-4890-a1e4-7d608158c919  *******/
+# ---------------------------------------------- 
 # Function to find season given month
 def find_season(month, hemisphere):
     if hemisphere == 'Southern':
@@ -218,6 +253,21 @@ def get_elements_nadir(list_of_arrays, positions):
     elem = [n[:, positions].flatten()[~np.isnan(n[:, positions].flatten())] for n in list_of_arrays if not np.all(np.isnan(n[:, positions]))]
     return np.hstack(elem)
 #----------------------------------------------
+def get_elements_nadir_df(list_of_dfs, positions):
+    # Initialize an empty list to store the selected rows
+    elem = [
+        # Iterate over each DataFrame in the list
+        df.xs(pos, level='col')['value']
+        # Iterate over each position in the positions list
+        for df in list_of_dfs 
+        for pos in positions 
+        # Only include DataFrames that have non-empty rows for the position
+        if pos in df.index.get_level_values('col')
+    ]
+    
+    # Concatenate the selected rows into a single DataFrame
+    return pd.concat(elem).values
+#----------------------------------------------
 
 def create_a_lat_mask(lat_data, target_lat, tolerance):
     """
@@ -280,6 +330,25 @@ def grab_group_data(lat_key,
 
         if not np.all(np.isnan(bt_group_data)):
             group_array_dict[lat_key][surface_type_id].append(bt_group_data)
+#----------------------------------------------
+def grab_group_data_df(lat_key, 
+                    surf_type_data, surface_type_elements, 
+                    lats, min_lat, max_lat, cld_prob, bt_data,
+                    group_df_dict):    
+             
+    for surface_type_id in surface_type_elements.keys():
+
+        mask = ((lats > min_lat) & (lats <= max_lat)) & \
+            (cld_prob >= 0.5) & (surf_type_data == surface_type_id)
+        
+        mask = np.where((mask == True), 1, np.nan)
+        
+        bt_group_data = np.where(mask == 1, bt_data, np.nan)
+
+        bt_group_df = nonnan_to_df(bt_group_data)
+
+        if not bt_group_df.isnull().all().all():
+            group_df_dict[lat_key][surface_type_id].append(bt_group_df)
 #----------------------------------------------
 def process_group_data_by_hemisphere_season_latitude_v2(variable_name, season_files, season):
     """
@@ -346,12 +415,12 @@ def process_group_data_by_hemisphere_season_latitude_v2(variable_name, season_fi
                 data_ranges[nh_lat_key] = {surface_type_id: [] for surface_type_id in nh_surface_type_elements.keys()}
 
             grab_group_data(sh_lat_key, surfact_type, sh_surface_type_elements, 
-                                                lats, sh_min_lat, sh_max_lat, cld_probability, 
-                                                brightness_temp, group_arrays_dict)
+                            lats, sh_min_lat, sh_max_lat, cld_probability, 
+                            brightness_temp, group_arrays_dict)
             
             grab_group_data(nh_lat_key, surfact_type, nh_surface_type_elements, 
-                                                lats, nh_min_lat, nh_max_lat, cld_probability, 
-                                                brightness_temp, group_arrays_dict)                
+                            lats, nh_min_lat, nh_max_lat, cld_probability, 
+                            brightness_temp, group_arrays_dict)                
 
         data.close()
         processed_files += 1
@@ -371,6 +440,80 @@ def process_group_data_by_hemisphere_season_latitude_v2(variable_name, season_fi
             else:
                 data_ranges[lat_key][surface_type_id] = (None, None)
     del(lat_key, group_arrays, surface_type_id, arrays)
+
+    return group_arrays_dict, data_ranges
+
+#----------------------------------------------
+
+def process_group_data_by_hemisphere_season_latitude_df_method(variable_name, season_files, season):
+    
+    group_arrays_dict = {}
+    data_ranges = {}
+    total_files = len(season_files)
+    processed_files = 0
+    sh_season = season
+    # Define corresponding NH data based on SH info
+    nh_season = {
+        'Summer': 'Winter',
+        'Autumn': 'Spring',
+        'Winter': 'Summer',
+        'Spring': 'Autumn'
+    }[sh_season]
+
+    for file in sorted(season_files):
+        data = xr.open_dataset(file)
+        lats = data['latitude'][:, :].data
+        brightness_temp = data[variable_name].data
+        cld_probability = data['cloud_probability'].data
+        surfact_type = data['land_class'].data
+
+        for window_key in latitude_windows['SH'].keys():
+            sh_window_range = latitude_windows['SH'][window_key]
+            sh_max_lat, sh_min_lat = max(sh_window_range), min(sh_window_range)
+            sh_surface_type_elements = get_custom_surface_type_mapping('SH', sh_season, sh_window_range)
+            sh_lat_key = f"{'SH'}_{sh_season}_{sh_window_range}"
+
+            nh_window_range = latitude_windows['NH'][window_key]
+            nh_max_lat, nh_min_lat = max(nh_window_range), min(nh_window_range)
+            nh_surface_type_elements = get_custom_surface_type_mapping('NH', nh_season, nh_window_range)
+            nh_lat_key = f"{'NH'}_{nh_season}_{nh_window_range}"
+            
+            if sh_lat_key not in group_arrays_dict:
+                    group_arrays_dict[sh_lat_key] = {surface_type_id: [] for surface_type_id in sh_surface_type_elements.keys()}
+                    data_ranges[sh_lat_key] = {surface_type_id: [] for surface_type_id in sh_surface_type_elements.keys()}
+
+            if nh_lat_key not in group_arrays_dict:
+                group_arrays_dict[nh_lat_key] = {surface_type_id: [] for surface_type_id in nh_surface_type_elements.keys()}
+                data_ranges[nh_lat_key] = {surface_type_id: [] for surface_type_id in nh_surface_type_elements.keys()}
+
+            grab_group_data_df(sh_lat_key, surfact_type, sh_surface_type_elements, 
+                              lats, sh_min_lat, sh_max_lat, cld_probability, 
+                              brightness_temp, group_arrays_dict)
+            
+            grab_group_data_df(nh_lat_key, surfact_type, nh_surface_type_elements, 
+                            lats, nh_min_lat, nh_max_lat, cld_probability, 
+                            brightness_temp, group_arrays_dict)                
+
+        data.close()
+        processed_files += 1
+        if processed_files % 400 == 0:
+            print(f"Processed {processed_files}/{total_files} files ({(processed_files / total_files) * 100:.2f}%)")
+
+    del (total_files, processed_files, sh_season, nh_season, file, data, lats, brightness_temp, cld_probability, surfact_type,
+         window_key, sh_window_range, sh_max_lat, sh_min_lat, sh_surface_type_elements, sh_lat_key,
+         nh_window_range, nh_max_lat, nh_min_lat, nh_surface_type_elements, nh_lat_key)
+
+    for lat_key, group_dfs in group_arrays_dict.items():
+        for surface_type_id, dfs in group_dfs.items():
+            if dfs:
+                data_min = min(i['value'].min() for i in dfs)
+                data_max = max(i['value'].max() for i in dfs)
+                data_ranges[lat_key][surface_type_id] = (data_min, data_max)
+            else:
+                data_ranges[lat_key][surface_type_id] = (None, None)
+    del(lat_key, group_dfs, surface_type_id, dfs)
+
+    gc.collect()
 
     return group_arrays_dict, data_ranges
 
@@ -433,6 +576,51 @@ def get_group_data(files, ir_var, hem, seasn, lat_window):
             data_ranges[surface_type_id] = (None, None)
 
     return group_arrays_dict, data_ranges
+#----------------------------------------------
+
+def get_group_data_dataframe_method(files, ir_var, hem, seasn, lat_window):
+    
+    count = 0
+    surface_type_elements = get_custom_surface_type_mapping(hem, seasn, lat_window)
+    print(f"Processing {list(surface_type_elements.values())} data for {hem} hemisphere in {seasn} season")
+
+    group_dfs_dict = {surface_type_id: [] for surface_type_id in surface_type_elements.keys()}
+    data_ranges = {}
+
+    max_lat, min_lat = max(lat_window), min(lat_window)
+
+    for file in sorted(files):
+        data = xr.open_dataset(file)
+        lats = data['latitude'][:, :].data
+        brightness_temp_11um = data[ir_var].data
+        cloud_probability = data['cloud_probability'].data
+        surfact_type = data['land_class'].data
+
+        for surface_type_id, surface_type_name in surface_type_elements.items():
+            
+            mask = ((lats > min_lat) & (lats <= max_lat)) & \
+                   (cloud_probability >= 0.5) & (surfact_type == surface_type_id)
+            mask = np.where((mask == True), 1, np.nan)
+            group_data = np.where(mask == 1, brightness_temp_11um, np.nan)
+
+            group_data2df = nonnan_to_df(group_data)
+
+            if not group_data2df.isnull().all().all():
+                group_dfs_dict[surface_type_id].append(group_data2df)
+
+        count += 1
+        if count % 400 == 0:
+            print(f"Processed {count}/{len(files)} ({(count / len(files)) * 100:.2f}%) of the total {len(files)} files")
+
+    for surface_type_id, group_df in group_dfs_dict.items():
+        if not group_df.empty:
+            data_min = min(i['value'].min() for i in group_df)
+            data_max = max(i['value'].max(i) for i in group_df)            
+            data_ranges[surface_type_id] = (data_min, data_max)
+        else:
+            data_ranges[surface_type_id] = (None, None)
+
+    return group_dfs_dict, data_ranges
 #----------------------------------------------
 
 def process_group_data_by_hem_season_lat_var(variable_name, seasonal_files):
@@ -566,7 +754,8 @@ def get_group_data_parallel(files, ir_var, hem, seasn, lat_window):
 
 def get_nadir_bins_and_histogram(array_data, bin_size, data_range):
 
-    all_nadirs = get_elements_nadir(array_data, reference_beam_positions)
+    # all_nadirs = get_elements_nadir(array_data, reference_beam_positions)
+    all_nadirs = get_elements_nadir_df(array_data, list(reference_beam_positions))
     all_nadirs = np.round(all_nadirs,3)
     # Create histograms with independent ranges
     nadir_hist, nadir_bins = create_histogram(all_nadirs, bin_size, data_range)
@@ -583,7 +772,7 @@ def process_to_get_nadir_stats(group_arrays_dict, data_ranges, bin_size):
     all_nadirs_by_srftype = {}
 
     for surf_type, group_arrays in group_arrays_dict.items():
-        print(f"Processing {surf_type} data")
+        # print(f"Processing {surf_type} data")
         surf_type_grp_array = group_arrays
         srf_type_data_ranges = data_ranges[surf_type]
 
@@ -599,6 +788,19 @@ def process_to_get_nadir_stats(group_arrays_dict, data_ranges, bin_size):
     
     return nadir_bins_by_srftype, nadir_hist_by_srftype, all_nadirs_by_srftype
 
+#----------------------------------------------
+def grab_nadir_stats_elements(group_array_dicts, group_array_rnges, dict_keys):
+    hem_nadir_bins, hem_nadir_hist, all_hem_nadirs = {}, {}, {}
+    for k in dict_keys:
+        group_array_dict = group_array_dicts[k]
+        group_array_rng = group_array_rnges[k]
+
+        hem_nadir_bins[k], hem_nadir_hist[k], all_hem_nadirs[k] = process_to_get_nadir_stats(group_array_dict, 
+                                                                                            group_array_rng, 
+                                                                                            bin_size)
+
+    return hem_nadir_bins, hem_nadir_hist, all_hem_nadirs
+        
 #----------------------------------------------
 def process_nadir_stats_by_hem_season_lat_var(group_arrays_dict, data_ranges, combinations, bin_size):
     sh_nadir_bins_by_srftype, sh_nadir_hist_by_srftype, sh_all_nadirs_by_srftype = {}, {}, {}

@@ -75,15 +75,38 @@ print('********* The group data *********')
 start_time = time.time()
 
 print('processing group data for temp_11_0um_nom')
+
+# Process each season individually
+season = 'Summer'
+season_files = seasonal_files[season]
+print(f"Processing season: {season} with {len(season_files)} files")
+group_array_df_dict, group_array_data_minmax_dict = process_group_data_by_hemisphere_season_latitude_df_method(
+                                   'temp_11_0um_nom', season_files, season)
+
+
+hem_nadir_bins, hem_nadir_hist, all_hem_nadirs = grab_nadir_stats_elements(group_array_df_dict, 
+                                                                           group_array_data_minmax_dict,
+                                                                           list(group_array_df_dict.keys()))
+
+print(f"Completed processing for season: {season}")
+
+#--------------------------------------------------------
+
+
+
+print('processing group data for temp_11_0um_nom')
 group_array_dict_elements_11 = {}
 
 # Process each season individually
 season = 'Summer'
 season_files = seasonal_files[season]
 print(f"Processing season: {season} with {len(season_files)} files")
-group_array_dict_elements_11[season] = process_group_data_by_hemisphere_season_latitude_v2(
+group_array_dict_elements_11[season] = process_group_data_by_hemisphere_season_latitude_df_method(
                                    'temp_11_0um_nom', season_files, season)
 print(f"Completed processing for season: {season}")
+
+# arr_try = group_array_dict_elements_11[season][0]['SH_Summer_(-75, -61)'][0][0]
+# arr2df = nonnan_to_df(arr_try)
 #%%
 season = 'Winter'
 season_files = seasonal_files[season]
@@ -106,13 +129,26 @@ group_array_dict_elements_11[season] = process_group_data_by_hemisphere_season_l
                                    'temp_11_0um_nom', season_files, season)
 print(f"Completed processing for season: {season}")
 #%%
-# print('processing group data for temp_12_0um_nom')    
-# group_array_dict_elements_12 = {}
-# for sees in seasonal_files.keys():
-#     season_files = seasonal_files[sees]
-#     group_array_dict_elements_12[sees] = process_group_data_by_hemisphere_season_latitude_v2(
+
+print('processing group data for temp_11_0um_nom')    
+group_array_dict_elements_11 = {}
+for sees in seasonal_files.keys():
+    print(f"Processing season: {sees} with {len(seasonal_files[sees])} files")
+    season_files = seasonal_files[sees]
+    group_array_dict_elements_11[sees] = process_group_data_by_hemisphere_season_latitude_df_method(                                       
+                                       'temp_11_0um_nom', season_files, sees)
+    
+    gc.collect()
+
+
+
+print('processing group data for temp_12_0um_nom')    
+group_array_dict_elements_12 = {}
+for sees in seasonal_files.keys():
+    season_files = seasonal_files[sees]
+    group_array_dict_elements_12[sees] = process_group_data_by_hemisphere_season_latitude_v2(
                                        
-#                                        'temp_12_0um_nom', seasonal_files, sees)
+                                       'temp_12_0um_nom', seasonal_files, sees)
 
 # End time of code
 end_time = time.time()
@@ -131,6 +167,11 @@ print('********* The nadir stats *********')
 # start time of code
 start_time = time.time()
 
+hem_group_dicts11, hem_group_data_rnges11 = group_array_dict_elements_11['Summer'][0], group_array_dict_elements_11['Summer'][1]
+
+summer_hem_nadir_bins, hem_nadir_hist, all_hem_nadirs = grab_nadir_stats_elements(hem_group_dicts11, 
+                                                                                  hem_group_data_rnges11,
+                                                                                  list(hem_group_dicts11.keys()))
 # Example usage for "temp_11_0um_nom"
 (sh_nadir_bins_by_srftype_11, sh_nadir_hist_by_srftype_11, sh_all_nadirs_by_srftype_11,
 nh_nadir_bins_by_srftype_11, nh_nadir_hist_by_srftype_11, nh_all_nadirs_by_srftype_11) = process_nadir_stats_by_hem_season_lat_var(
