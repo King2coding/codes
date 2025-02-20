@@ -996,10 +996,10 @@ def grab_limb_stats_elements(group_df_dicts, group_data_rnges,
         nadir_hist_dict = nadir_hist_dicts[k]    
 
 
-        hem_LUTs_by_srftype[k], hem_limb_hists_by_srftype[k], 
-        hem_limb_bins_by_srftype[k], hem_nadir_hists_by_srftype[k], \
-        hem_nadir_bins_by_srftype[k], hem_adjusted_limb_bins_by_srftype[k], \
-        all_hem_limbs_by_srftype[k] = process_to_get_limb_stats(
+        (hem_LUTs_by_srftype[k], hem_limb_hists_by_srftype[k], 
+        hem_limb_bins_by_srftype[k], hem_nadir_hists_by_srftype[k], 
+        hem_nadir_bins_by_srftype[k], hem_adjusted_limb_bins_by_srftype[k], 
+        all_hem_limbs_by_srftype[k]) = process_to_get_limb_stats(
                                     group_df_dict, group_dat_rng, 
                                     nadir_bn_dict, nadir_hist_dict,
                                     lat_wind)
