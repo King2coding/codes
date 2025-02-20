@@ -947,6 +947,39 @@ def process_to_get_limb_stats(group_arrays_dict, data_ranges,
 def grab_limb_stats_elements(group_df_dicts, group_data_rnges, 
                              nadir_bin_dicts, nadir_hist_dicts, 
                              dict_keys):
+# /*************  ✨ Codeium Command ⭐  *************/
+    """
+    Processes and organizes limb statistics elements for different surface types.
+
+    This function iterates over the provided dictionary keys to extract and process
+    limb statistics for each surface type and latitude window. It generates lookup
+    tables, histograms, and adjusted limb bins by calling `process_to_get_limb_stats`.
+
+    Parameters:
+    group_df_dicts (dict): A dictionary where keys are hemisphere-season-latitude
+        combinations, and values are dataframes containing grouped limb data.
+    group_data_rnges (dict): A dictionary where keys are hemisphere-season-latitude
+        combinations, and values are tuples representing data ranges for each surface type.
+    nadir_bin_dicts (dict): A dictionary where keys are hemisphere-season-latitude
+        combinations, and values are dictionaries of nadir bin edges by surface type.
+    nadir_hist_dicts (dict): A dictionary where keys are hemisphere-season-latitude
+        combinations, and values are dictionaries of nadir histograms by surface type.
+    dict_keys (list): A list of keys indicating the hemisphere-season-latitude
+        combinations to process.
+
+    Returns:
+    tuple: A tuple containing:
+        - hem_LUTs_by_srftype (dict): Lookup tables by surface type.
+        - hem_limb_hists_by_srftype (dict): Limb histograms by surface type.
+        - hem_limb_bins_by_srftype (dict): Limb bins by surface type.
+        - hem_nadir_hists_by_srftype (dict): Nadir histograms by surface type.
+        - hem_nadir_bins_by_srftype (dict): Nadir bins by surface type.
+        - hem_adjusted_limb_bins_by_srftype (dict): Adjusted limb bins by surface type.
+        - all_hem_limbs_by_srftype (dict): All limb data by surface type.
+    """
+
+# /******  92050a4b-b7fc-4fc6-aed1-5a62c899dc10  *******/
+    
     hem_LUTs_by_srftype = {}
     hem_nadir_bins_by_srftype = {}
     hem_nadir_hists_by_srftype = {}

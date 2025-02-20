@@ -95,7 +95,12 @@ gc.collect()
 #--------------------------------------------------------
 print('********* The limb stats *********')
 
-
+hem_luts_by_srftyp, hem_limb_hist_by_srftyp, hem_limb_bns_by_srftyp,\
+hem_nadir_hists_by_srftyp, hem_nadir_bins_by_srftyp,\
+hem_adj_limb_bns_by_srftyp, all_hem_limb_by_srftyp = grab_limb_stats_elements(
+                                                    group_array_df_dict, group_array_data_minmax_dict,
+                                                    hem_nadir_bins, hem_nadir_hist,
+                                                    list(group_array_df_dict.keys()))
 print(f"Completed processing for season: {season}")
 
 
