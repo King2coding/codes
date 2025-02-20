@@ -83,14 +83,34 @@ print(f"Processing season: {season} with {len(season_files)} files")
 group_array_df_dict, group_array_data_minmax_dict = process_group_data_by_hemisphere_season_latitude_df_method(
                                    'temp_11_0um_nom', season_files, season)
 
+gc.collect()
+#--------------------------------------------------------
+print('********* The nadir stats *********')
 
 hem_nadir_bins, hem_nadir_hist, all_hem_nadirs = grab_nadir_stats_elements(group_array_df_dict, 
                                                                            group_array_data_minmax_dict,
                                                                            list(group_array_df_dict.keys()))
+gc.collect()
+
+#--------------------------------------------------------
+print('********* The limb stats *********')
+
 
 print(f"Completed processing for season: {season}")
 
-#--------------------------------------------------------
+
+# End time of code
+end_time = time.time()
+# Compute elapsed time
+elapsed_seconds = end_time - start_time
+elapsed_minutes = elapsed_seconds / 60
+elapsed_hours = elapsed_seconds / 3600
+
+# Print results
+print(f"Elapsed time for getting group data: {elapsed_seconds:.2f} seconds "
+      f"({elapsed_minutes:.2f} minutes) ({elapsed_hours:.5f} hours)")
+#%%
+start_time = time.time()
 
 
 

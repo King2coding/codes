@@ -253,7 +253,7 @@ def get_elements_nadir(list_of_arrays, positions):
     elem = [n[:, positions].flatten()[~np.isnan(n[:, positions].flatten())] for n in list_of_arrays if not np.all(np.isnan(n[:, positions]))]
     return np.hstack(elem)
 #----------------------------------------------
-def get_elements_nadir_df(list_of_dfs, positions):
+def get_values_from_df(list_of_dfs, positions):
     # Initialize an empty list to store the selected rows
     elem = [
         # Iterate over each DataFrame in the list
@@ -752,10 +752,10 @@ def get_group_data_parallel(files, ir_var, hem, seasn, lat_window):
 
 #------------------------------------------
 
-def get_nadir_bins_and_histogram(array_data, bin_size, data_range):
+def get_nadir_bins_and_histogram(df_list, bin_size, data_range):
 
     # all_nadirs = get_elements_nadir(array_data, reference_beam_positions)
-    all_nadirs = get_elements_nadir_df(array_data, list(reference_beam_positions))
+    all_nadirs = get_values_from_df(df_list, list(reference_beam_positions))
     all_nadirs = np.round(all_nadirs,3)
     # Create histograms with independent ranges
     nadir_hist, nadir_bins = create_histogram(all_nadirs, bin_size, data_range)
@@ -839,7 +839,8 @@ def process_nadir_stats_by_hem_season_lat_var(group_arrays_dict, data_ranges, co
 #----------------------------------------------
 
 def get_limb_bins_and_histogram(group_data, bm_pos, data_range):
-    all_limbs_at_i = get_elements_limb(group_data, bm_pos)
+    # all_limbs_at_i = get_elements_limb(group_data, bm_pos)
+    all_limbs_at_i = get_values_from_df(group_data, bm_pos)
     all_limbs_at_i = np.round(all_limbs_at_i,3)              
 
     # Create histograms with independent ranges
@@ -868,7 +869,7 @@ def get_LUT(group_data, nadir_bins, nadir_hist, data_range, lat_window, surface_
         # Adjust the range dynamically based on beam position edges
         start = max(0, i - 10)  # Ensure the range doesn't go below 0
         end = min(409, i + 10)  # Ensure the range doesn't exceed 409
-        limb_pos_rng = range(start, end)
+        limb_pos_rng = list(range(start, end))
 
         # Collect all data within the current window
         limb_bins, limb_hist, all_limbs_at_i = get_limb_bins_and_histogram(group_data, limb_pos_rng, data_range) 
@@ -911,16 +912,16 @@ def process_to_get_limb_stats(group_arrays_dict, data_ranges,
     adjusted_limb_bins_list_by_srftype = {}
     all_limbs_at_i_list_by_srftype = {}
 
-    for surf_type, group_arrays in group_arrays_dict.items():
+    for surf_type, group_df in group_arrays_dict.items():
 
-        surf_type_grp_array = group_arrays
+        surf_type_grp_df = group_df
         srf_type_data_ranges = data_ranges[surf_type]
 
         srf_type_nadir_bins = nadir_bins_by_srftype[surf_type]
         srf_type_nadir_hist = nadir_hist_by_srftype[surf_type]
 
         lookup_table, limb_hist_list, limb_bin_list, nadir_hist_list, \
-        nadir_bin_list, adjusted_limb_bins_list, all_limbs_at_i_list = get_LUT(surf_type_grp_array, 
+        nadir_bin_list, adjusted_limb_bins_list, all_limbs_at_i_list = get_LUT(surf_type_grp_df, 
                                                                                srf_type_nadir_bins, 
                                                                                srf_type_nadir_hist, 
                                                                                srf_type_data_ranges, 
@@ -941,6 +942,40 @@ def process_to_get_limb_stats(group_arrays_dict, data_ranges,
             adjusted_limb_bins_list_by_srftype, 
             all_limbs_at_i_list_by_srftype)
 
+#----------------------------------------------
+
+def grab_limb_stats_elements(group_df_dicts, group_data_rnges, 
+                             nadir_bin_dicts, nadir_hist_dicts, 
+                             dict_keys):
+    hem_LUTs_by_srftype = {}
+    hem_nadir_bins_by_srftype = {}
+    hem_nadir_hists_by_srftype = {}
+    hem_limb_bins_by_srftype = {}
+    hem_limb_hists_by_srftype = {}
+    all_hem_limbs_by_srftype = {}
+    hem_adjusted_limb_bins_by_srftype = {}
+    for k in dict_keys:
+        lat_wind = k.split('_')[-1]
+        group_df_dict = group_df_dicts[k]
+        group_dat_rng = group_data_rnges[k]
+
+        nadir_bn_dict = nadir_bin_dicts[k]
+        nadir_hist_dict = nadir_hist_dicts[k]    
+
+
+        hem_LUTs_by_srftype[k], hem_limb_hists_by_srftype[k], 
+        hem_limb_bins_by_srftype[k], hem_nadir_hists_by_srftype[k], \
+        hem_nadir_bins_by_srftype[k], hem_adjusted_limb_bins_by_srftype[k], \
+        all_hem_limbs_by_srftype[k] = process_to_get_limb_stats(
+                                    group_df_dict, group_dat_rng, 
+                                    nadir_bn_dict, nadir_hist_dict,
+                                    lat_wind)
+
+    return (hem_LUTs_by_srftype, 
+            hem_limb_hists_by_srftype, hem_limb_bins_by_srftype,
+            hem_nadir_hists_by_srftype, hem_nadir_bins_by_srftype,
+            hem_adjusted_limb_bins_by_srftype, all_hem_limbs_by_srftype)
+        
 #----------------------------------------------
 
 def process_surface_type(surf_type, group_arrays, srf_type_data_ranges, srf_type_nadir_bins, srf_type_nadir_hist, lat_wind):
@@ -995,7 +1030,9 @@ def process_to_get_limb_stats_fast(group_arrays_dict, data_ranges,
 
 #----------------------------------------------
 
-def process_limb_stats_by_hem_season_lat_var(group_arrays_dict, data_ranges, nadir_bins_by_srftype, nadir_hist_by_srftype, combinations):
+def process_limb_stats_by_hem_season_lat_var(group_arrays_dict, data_ranges, 
+                                             nadir_bins_by_srftype, nadir_hist_by_srftype, 
+                                             combinations):
     # Initialize dictionaries to store results
     lookup_table_by_srftype_sh, limb_hist_list_by_srftype_sh, limb_bin_list_by_srftype_sh = {}, {}, {}
     nadir_hist_list_by_srftype_sh, nadir_bin_list_by_srftype_sh, adjusted_limb_bins_list_by_srftype_sh = {}, {}, {}
