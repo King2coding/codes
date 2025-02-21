@@ -113,7 +113,7 @@ for season in seasonal_files.keys():
 
     # Iterate over the keys in the hem_luts_by_srftyp dictionary
     for key, value in hem_luts_by_srftyp.items():
-        print(key)
+        # print(key)
         lat_w = key.split('_')[2]
         # Extract the hemisphere and season from the key
         hemisphere, season = key.split('_')[0], key.split('_')[1]
@@ -156,7 +156,7 @@ for season in seasonal_files.keys():
         lat_wind = dta['latitude_bin'].unique()
 
         for l in lat_wind:
-            print(l)
+            # print(l)
             sftyp_lut1 = dta[dta['latitude_bin'] == l]
 
             srftypes = sftyp_lut1['surface_type'].unique()
