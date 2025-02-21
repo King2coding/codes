@@ -72,7 +72,7 @@ gc.collect()
 #%%
 print('********* The group data *********')
 var2process = 'temp_11_0um_nom'
-
+var_nme_sve = var2process.replace('_0um_nom','')
 start_time = time.time()
 
 print(f'processing group data for {var2process}')
@@ -144,7 +144,7 @@ for season in seasonal_files.keys():
 
     # save lut for each hemisphere and season
     for ke, dta in data_dict.items():
-        lut_name = os.path.join(df_dir,f'{ke}_{cde_run_dte}.csv')
+        lut_name = os.path.join(df_dir,f'{var_nme_sve}_{ke}_{cde_run_dte}.csv')
         dta.to_csv(lut_name, index=False)
     del(ke,dta)
 
@@ -166,9 +166,9 @@ for season in seasonal_files.keys():
             for sf in srftypes:
                 surf_str = surface_type_mapping[sf]
                 sftyp_lut2 = sftyp_lut1[sftyp_lut1['surface_type'] == sf]
-                plt_nme = f'{hem}_{sesn}_{l}_Distribution_of_correctiopn_coefficient_per_beam_pos_{surf_str}_{cde_run_dte}.png'
+                plt_nme = f'{var_nme_sve}_{hem}_{sesn}_{l}_Distribution_of_correctiopn_coefficient_per_beam_pos_{surf_str}_{cde_run_dte}.png'
                 plt_nme  = os.path.join(plot_dir,plt_nme)
-                ttle = f'{hem} {sesn} {l}  {surf_str}: Distribution of correction coefficient per beam position'
+                ttle = f'{var_nme_sve} {hem} {sesn} {l}  {surf_str}: Distribution of correction coefficient per beam position'
                 box_plot_of_corr_coeff(sftyp_lut2, 'beam_position', 
                                     'corr_coeff', np.arange(0, 410, 50).tolist(), 
                                     ttle, plt_nme) 
@@ -176,23 +176,24 @@ for season in seasonal_files.keys():
 
     print('********* The line plot *********')
 
-for ke in hem_limb_hist_by_srftyp.keys():
-    print(ke)
-    hem, season, lat_w = ke.split('_')
-    # gather all plot data
-    limb_bn_lst_by_srftyp = hem_limb_bns_by_srftyp[ke]
-    limb_hist_lst_by_srftyp = hem_limb_hist_by_srftyp[ke]
-    adj_limb_bn_lst_by_srftyp = hem_adj_limb_bns_by_srftyp[ke]
-    nadir_bn_lst_by_srftyp = hem_nadir_bins_by_srftyp[ke]
-    nadir_hist_lst_by_srftyp = hem_nadir_hists_by_srftyp[ke]
-    
-    # Example usage:
-    plot_lut_histograms_by_hemisphere(hem, season, 
-                                    limb_bn_lst_by_srftyp, limb_hist_lst_by_srftyp, 
-                                    adj_limb_bn_lst_by_srftyp, nadir_bn_lst_by_srftyp, 
-                                    nadir_hist_lst_by_srftyp, plot_dir, cde_run_dte, lat_w)
+    for ke in hem_limb_hist_by_srftyp.keys():
+        # print(ke)
+        hem, season, lat_w = ke.split('_')
+        # gather all plot data
+        limb_bn_lst_by_srftyp = hem_limb_bns_by_srftyp[ke]
+        limb_hist_lst_by_srftyp = hem_limb_hist_by_srftyp[ke]
+        adj_limb_bn_lst_by_srftyp = hem_adj_limb_bns_by_srftyp[ke]
+        nadir_bn_lst_by_srftyp = hem_nadir_bins_by_srftyp[ke]
+        nadir_hist_lst_by_srftyp = hem_nadir_hists_by_srftyp[ke]
+        
+        # Example usage:
+        plot_lut_histograms_by_hemisphere(hem, season, var_nme_sve,
+                                        limb_bn_lst_by_srftyp, limb_hist_lst_by_srftyp, 
+                                        adj_limb_bn_lst_by_srftyp, nadir_bn_lst_by_srftyp, 
+                                        nadir_hist_lst_by_srftyp, plot_dir, cde_run_dte, lat_w)
+        gc.collect()
 
-    print(f"Completed processing for season: {season}")
+        print(f"Completed processing for season: {season}")
 #--------------------------------------------------------
 
 # End time of code
