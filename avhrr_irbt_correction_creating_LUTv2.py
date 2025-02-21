@@ -103,6 +103,11 @@ hem_adj_limb_bns_by_srftyp, all_hem_limb_by_srftyp = grab_limb_stats_elements(
                                                     list(group_array_df_dict.keys()))
 print(f"Completed processing for season: {season}")
 
+dfss = group_array_df_dict['SH_Summer_(-75, -61)'][0] #[nonnan_to_df(i) for i in group_array_df_dict['SH_Summer_(-75, -61)'][0]]
+
+met1 = get_values_from_df_fast(dfss, limb_beam_positions)
+
+met2 = get_values_from_df(dfss, limb_beam_positions)
 
 # End time of code
 end_time = time.time()
@@ -116,7 +121,6 @@ print(f"Elapsed time for getting group data: {elapsed_seconds:.2f} seconds "
       f"({elapsed_minutes:.2f} minutes) ({elapsed_hours:.5f} hours)")
 #%%
 start_time = time.time()
-
 
 
 print('processing group data for temp_11_0um_nom')

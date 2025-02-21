@@ -253,6 +253,22 @@ def get_elements_nadir(list_of_arrays, positions):
     elem = [n[:, positions].flatten()[~np.isnan(n[:, positions].flatten())] for n in list_of_arrays if not np.all(np.isnan(n[:, positions]))]
     return np.hstack(elem)
 #----------------------------------------------
+def get_values_from_df_fast(list_of_dfs, positions):
+    # Initialize an empty list to store the selected rows
+    elem = []
+    
+    # Iterate over each DataFrame in the list
+    for df in list_of_dfs:
+        # Filter the DataFrame to include only the specified positions
+        filtered_df = df[df.index.get_level_values('col').isin(positions)]
+        # Append the values to the list if the filtered DataFrame is not empty
+        if not filtered_df.empty:
+            elem.append(filtered_df['value'].values)
+    
+    # Concatenate the selected rows into a single array
+    return np.concatenate(elem)
+#----------------------------------------------
+
 def get_values_from_df(list_of_dfs, positions):
     # Initialize an empty list to store the selected rows
     elem = [
@@ -755,7 +771,7 @@ def get_group_data_parallel(files, ir_var, hem, seasn, lat_window):
 def get_nadir_bins_and_histogram(df_list, bin_size, data_range):
 
     # all_nadirs = get_elements_nadir(array_data, reference_beam_positions)
-    all_nadirs = get_values_from_df(df_list, list(reference_beam_positions))
+    all_nadirs = get_values_from_df_fast(df_list, list(reference_beam_positions))
     all_nadirs = np.round(all_nadirs,3)
     # Create histograms with independent ranges
     nadir_hist, nadir_bins = create_histogram(all_nadirs, bin_size, data_range)
@@ -840,7 +856,7 @@ def process_nadir_stats_by_hem_season_lat_var(group_arrays_dict, data_ranges, co
 
 def get_limb_bins_and_histogram(group_data, bm_pos, data_range):
     # all_limbs_at_i = get_elements_limb(group_data, bm_pos)
-    all_limbs_at_i = get_values_from_df(group_data, bm_pos)
+    all_limbs_at_i = get_values_from_df_fast(group_data, bm_pos)
     all_limbs_at_i = np.round(all_limbs_at_i,3)              
 
     # Create histograms with independent ranges
@@ -988,6 +1004,7 @@ def grab_limb_stats_elements(group_df_dicts, group_data_rnges,
     all_hem_limbs_by_srftype = {}
     hem_adjusted_limb_bins_by_srftype = {}
     for k in dict_keys:
+        print(f"Processing {k}")
         lat_wind = k.split('_')[-1]
         group_df_dict = group_df_dicts[k]
         group_dat_rng = group_data_rnges[k]
