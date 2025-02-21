@@ -369,18 +369,19 @@ def plot_distribution_at_beam_position(limb_bn, limb_cnt, limb_adj,
 
 #------------------------------------------
 
-def plot_lut_histograms_by_hemisphere(hemisphere, limb_bin_list_by_srftype, limb_hist_list_by_srftype, 
+def plot_lut_histograms_by_hemisphere(hem, seasn,
+                                      limb_bin_list_by_srftype, limb_hist_list_by_srftype, 
                                       adjusted_limb_bins_list_by_srftype, nadir_bin_list_by_srftype, 
                                       nadir_hist_list_by_srftype, plot_dir, cde_run_dte, lat_wind):
-    season = "summer" if hemisphere == "SH" else "winter"
+    # season = "summer" if hemisphere == "SH" else "winter"
     for id in surface_type_mapping.keys():
         if id in limb_bin_list_by_srftype.keys():
             sftyp = surface_type_mapping[id]
             for b in [0, 10, 50, 100, 400]:
                 beam_pos = b
-                plt_nme = f'LUT_method_line_plot_histogram_{hemisphere}_{sftyp}_{beam_pos}_{cde_run_dte}.png'
+                plt_nme = f'LUT_method_line_plot_histogram_{hem}_{seasn}_{lat_wind}_{sftyp}_{beam_pos}_{cde_run_dte}.png'
                 plt_nme = os.path.join(plot_dir, plt_nme)
-                ttle = f"{hemisphere.upper()} {season.capitalize()} 1998 IR TB Distribution \n beam position={beam_pos} (+/- 10) \n latitude window = {lat_wind} \n surface type= {sftyp}"
+                ttle = f"{hem.upper()} {seasn.capitalize()} 1998 IR TB Distribution \n beam position={beam_pos} (+/- 10) \n latitude window = {lat_wind} \n surface type= {sftyp}"
 
                 plot_distribution_at_beam_position(limb_bin_list_by_srftype[id], 
                                                 limb_hist_list_by_srftype[id], 

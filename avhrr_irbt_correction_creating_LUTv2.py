@@ -174,8 +174,25 @@ for season in seasonal_files.keys():
                                     ttle, plt_nme) 
                 gc.collect()
 
-    print(f"Completed processing for season: {season}")
+    print('********* The line plot *********')
 
+for ke in hem_limb_hist_by_srftyp.keys():
+    print(ke)
+    hem, season, lat_w = ke.split('_')
+    # gather all plot data
+    limb_bn_lst_by_srftyp = hem_limb_bns_by_srftyp[ke]
+    limb_hist_lst_by_srftyp = hem_limb_hist_by_srftyp[ke]
+    adj_limb_bn_lst_by_srftyp = hem_adj_limb_bns_by_srftyp[ke]
+    nadir_bn_lst_by_srftyp = hem_nadir_bins_by_srftyp[ke]
+    nadir_hist_lst_by_srftyp = hem_nadir_hists_by_srftyp[ke]
+    
+    # Example usage:
+    plot_lut_histograms_by_hemisphere(hem, season, 
+                                    limb_bn_lst_by_srftyp, limb_hist_lst_by_srftyp, 
+                                    adj_limb_bn_lst_by_srftyp, nadir_bn_lst_by_srftyp, 
+                                    nadir_hist_lst_by_srftyp, plot_dir, cde_run_dte, lat_w)
+
+    print(f"Completed processing for season: {season}")
 #--------------------------------------------------------
 
 # End time of code
@@ -188,20 +205,5 @@ elapsed_hours = elapsed_seconds / 3600
 # Print results
 print(f"Elapsed time for getting group data: {elapsed_seconds:.2f} seconds "
       f"({elapsed_minutes:.2f} minutes) ({elapsed_hours:.5f} hours)")
-             
-#%%
-# print('********* The line plot *********')
 
-# # some plots
-
-# # Example usage:
-# plot_lut_histograms_by_hemisphere('SH', limb_bin_list_by_srftype_sh, limb_hist_list_by_srftype_sh, 
-#                                   adjusted_limb_bins_list_by_srftype_sh, nadir_bin_list_by_srftype_sh, 
-#                                   nadir_hist_list_by_srftype_sh, plot_dir, cde_run_dte, sh_lat_wind)
-
-# plot_lut_histograms_by_hemisphere('NH', limb_bin_list_by_srftype_nh, limb_hist_list_by_srftype_nh, 
-#                                   adjusted_limb_bins_list_by_srftype_nh, nadir_bin_list_by_srftype_nh, 
-#                                   nadir_hist_list_by_srftype_nh, plot_dir, cde_run_dte, nh_lat_wind)"""
-#--------------------------------------------------------
-# 
-# # End time of code"""
+print('End time of code')
