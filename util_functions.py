@@ -1005,7 +1005,7 @@ def grab_limb_stats_elements(group_df_dicts, group_data_rnges,
     hem_adjusted_limb_bins_by_srftype = {}
     for k in dict_keys:
         print(f"Processing {k}")
-        lat_wind = k.split('_')[-1]
+        lat_wind = k.split('_')[2]
         group_df_dict = group_df_dicts[k]
         group_dat_rng = group_data_rnges[k]
 

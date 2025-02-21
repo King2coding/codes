@@ -101,13 +101,77 @@ hem_adj_limb_bns_by_srftyp, all_hem_limb_by_srftyp = grab_limb_stats_elements(
                                                     group_array_df_dict, group_array_data_minmax_dict,
                                                     hem_nadir_bins, hem_nadir_hist,
                                                     list(group_array_df_dict.keys()))
+
+gc.collect()
+
+#--------------------------------------------------------
+# Concatenate the DataFrames for each hemisphere and season
+data_dict = {}
+
+# Iterate over the keys in the hem_luts_by_srftyp dictionary
+for key, value in hem_luts_by_srftyp.items():
+    print(key)
+    lat_w = key.split('_')[2]
+    # Extract the hemisphere and season from the key
+    hemisphere, season = key.split('_')[0], key.split('_')[1]
+
+    # Create a new key for the data_dict dictionary
+    new_key = f"{hemisphere}_{season}"
+
+    # If the new key is not already in the data_dict dictionary, add it
+    if new_key not in data_dict:
+        data_dict[new_key] = []
+
+    # Set the 'latitude_bin' column in each DataFrame
+    for df in value:
+        value[df]['latitude_bin'] = lat_w
+
+    # Concatenate the DataFrames within the key and append to the data_dict list
+    data_dict[new_key].append(pd.concat(value, ignore_index=True))
+del(key,value)
+gc.collect()
+
+# Combine the DataFrames from each hemisphere and season into separate DataFrames
+for key, value in data_dict.items():
+    data_dict[key] = pd.concat(value, ignore_index=True)
+del(key,value)
+#--------------------------------------------------------
+
+# save lut for each hemisphere and season
+for ke, dta in data_dict.items():
+    lut_name = os.path.join(df_dir,f'{ke}_{cde_run_dte}.csv')
+    dta.to_csv(lut_name, index=False)
+del(ke,dta)
+
+gc.collect()
+
+#--------------------------------------------------------
+for ke, dta in data_dict.items():
+
+    hem, sesn = ke.split('_')[0], ke.split('_')[1]    
+
+    lat_wind = dta['latitude_bin'].unique()
+
+    for l in lat_wind:
+        print(l)
+        sftyp_lut1 = dta[dta['latitude_bin'] == l]
+
+        srftypes = sftyp_lut1['surface_type'].unique()
+
+        for sf in srftypes:
+            surf_str = surface_type_mapping[sf]
+            sftyp_lut2 = sftyp_lut1[sftyp_lut1['surface_type'] == sf]
+            plt_nme = f'{hem}_{sesn}_{l}_Distribution_of_correctiopn_coefficient_per_beam_pos_{surf_str}_{cde_run_dte}.png'
+            plt_nme  = os.path.join(plot_dir,plt_nme)
+            ttle = f'{hem} {sesn} {l}  {surf_str}: Distribution of correction coefficient per beam position'
+            box_plot_of_corr_coeff(sftyp_lut2, 'beam_position', 
+                                   'corr_coeff', np.arange(0, 410, 50).tolist(), 
+                                   ttle, plt_nme) 
+            gc.collect()
+
 print(f"Completed processing for season: {season}")
 
-dfss = group_array_df_dict['SH_Summer_(-75, -61)'][0] #[nonnan_to_df(i) for i in group_array_df_dict['SH_Summer_(-75, -61)'][0]]
-
-met1 = get_values_from_df_fast(dfss, limb_beam_positions)
-
-met2 = get_values_from_df(dfss, limb_beam_positions)
+#--------------------------------------------------------
 
 # End time of code
 end_time = time.time()
@@ -119,6 +183,20 @@ elapsed_hours = elapsed_seconds / 3600
 # Print results
 print(f"Elapsed time for getting group data: {elapsed_seconds:.2f} seconds "
       f"({elapsed_minutes:.2f} minutes) ({elapsed_hours:.5f} hours)")
+             
+#%%
+# print('********* The line plot *********')
+
+# # some plots
+
+# # Example usage:
+# plot_lut_histograms_by_hemisphere('SH', limb_bin_list_by_srftype_sh, limb_hist_list_by_srftype_sh, 
+#                                   adjusted_limb_bins_list_by_srftype_sh, nadir_bin_list_by_srftype_sh, 
+#                                   nadir_hist_list_by_srftype_sh, plot_dir, cde_run_dte, sh_lat_wind)
+
+# plot_lut_histograms_by_hemisphere('NH', limb_bin_list_by_srftype_nh, limb_hist_list_by_srftype_nh, 
+#                                   adjusted_limb_bins_list_by_srftype_nh, nadir_bin_list_by_srftype_nh, 
+#                                   nadir_hist_list_by_srftype_nh, plot_dir, cde_run_dte, nh_lat_wind)"""
 #%%
 start_time = time.time()
 
@@ -303,95 +381,7 @@ for hem, hem_data in zip(['SH', 'NH'], [lookup_table_by_srftype_sh, lookup_table
                                 'beam_position', 
                                 'corr_coeff', 
                                 np.arange(0, 410, 50).tolist(), 
-                                plt_nme)                
-#%%
-print('********* The line plot *********')
-
-# some plots
-
-# Example usage:
-plot_lut_histograms_by_hemisphere('SH', limb_bin_list_by_srftype_sh, limb_hist_list_by_srftype_sh, 
-                                  adjusted_limb_bins_list_by_srftype_sh, nadir_bin_list_by_srftype_sh, 
-                                  nadir_hist_list_by_srftype_sh, plot_dir, cde_run_dte, sh_lat_wind)
-
-plot_lut_histograms_by_hemisphere('NH', limb_bin_list_by_srftype_nh, limb_hist_list_by_srftype_nh, 
-                                  adjusted_limb_bins_list_by_srftype_nh, nadir_bin_list_by_srftype_nh, 
-                                  nadir_hist_list_by_srftype_nh, plot_dir, cde_run_dte, nh_lat_wind)
-         
-#%%
-print('********* The correction *********')
-# limb_beam_positions, 
-cor_tb_ex = apply_lut_corrections_fast(file2run,                                    
-                                       [(61,75),(-75,-61)], 
-                                       lut_full, 
-                                       cor_dir)
-
-
-
-# Example usage
-start_time = time.time()
-corrected_arrays, observed_arrays = process_files_in_parallel(
-    summer_files, [(53,61),(-53,-61)], lookup_df=lut_full,
-    limb_beam_positions=limb_beam_positions, cor_dir=cor_dir
-)
-# End time of code
-end_time = time.time()
-# Compute elapsed time
-elapsed_seconds = end_time - start_time
-elapsed_minutes = elapsed_seconds / 60
-elapsed_hours = elapsed_seconds / 3600
-# Print results
-print(f"Elapsed time for applying correction: {elapsed_seconds:.2f} seconds "
-    f"({elapsed_minutes:.2f} minutes) ({elapsed_hours:.5f} hours)")
-
-#%%
-print('********* doing plot_ir_tb_distribution_with_means dist plots now *********')
-
-for hemisphere in ['NH', 'SH']:
-    # pull hemisphere data
-    obs_data_hem = observed_arrays[hemisphere]
-    cor_data_hem = corrected_arrays[hemisphere]
-
-    # pull surface type data
-    for i in surface_type_mapping.keys():
-        sftype = surface_type_mapping[i]
-        obs_by_srftyp_array = obs_data_hem[i]
-        cor_by_srftyp_array = cor_data_hem[i]
-
-        # Generate distribution with means
-        orig_hist_dist, org_bns, org_means = generate_distribution_with_means(obs_by_srftyp_array)
-        cor_hist_dist, cor_bns, cor_means = generate_distribution_with_means(cor_by_srftyp_array)
-
-        #--------------------------------------------------------
-        # Plot the distributions using different plot methods 
-        savefig = f"{sftype}_{hemisphere}-percent_dist_by_LUT_normal_version_{cde_run_dte}.png"    
-        savefig  = os.path.join(plot_dir, savefig)
-        plot_ir_tb_distribution_with_means_normal_version(
-                                    orig_hist_dist, org_bns, org_means,
-                                    cor_hist_dist, cor_bns, cor_means,
-                                    beam_positions, savefig)
-
-        #--------------------------------------------------------
-
-        savefig = f"{sftype}_{hemisphere}-percent_dist_by_LUT_log_version_{cde_run_dte}.png"    
-        savefig  = os.path.join(plot_dir, savefig)
-        plot_ir_tb_distribution_with_means_log_version(
-                                    orig_hist_dist, org_bns, org_means,
-                                    cor_hist_dist, cor_bns, cor_means,
-                                    beam_positions, savefig)
-        #--------------------------------------------------------
-
-        savefig = f"{sftype}_{hemisphere}-percent_dist_by_LUT_discrete-log_version_{cde_run_dte}.png"
-        savefig  = os.path.join(plot_dir, savefig)
-        plot_ir_tb_distribution_with_means_discrete_log(
-                                    orig_hist_dist, org_bns, org_means,
-                                    cor_hist_dist, cor_bns, cor_means,
-                                    beam_positions, savefig)
-        #--------------------------------------------------------
-
-        savefig = f"{sftype}_{hemisphere}-percent_dist_by_LUT_contourf_version_{cde_run_dte}.png"        
-        savefig  = os.path.join(plot_dir, savefig)
-        plot_discrete_ir_tb_distribution(
-                                    orig_hist_dist, org_bns, org_means,
-                                    cor_hist_dist, cor_bns, cor_means,
-                                    beam_positions, savefig)
+                                plt_nme)   
+#--------------------------------------------------------
+# 
+# # End time of code"""

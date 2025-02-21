@@ -398,7 +398,7 @@ def groupby_and_plot(dat, grb_col, plt_col, srftyp, hem):
                         figsize=(10, 6), grid=True) 
     
 #------------------------------------------
-def box_plot_of_corr_coeff(lut, xcol, ycol, xticks, savefig):
+def box_plot_of_corr_coeff(lut, xcol, ycol, xticks, ttle, savefig):
     """
     A box plot (or box-and-whisker plot) is a standardized way of displaying 
     the distribution of data based on a five-number summary: minimum, first 
@@ -445,7 +445,7 @@ def box_plot_of_corr_coeff(lut, xcol, ycol, xticks, savefig):
     ax.scatter(range(len(mean_values)), mean_values, 
                color='k', s=2, zorder=5)
 
-    ax.set_title('Distribution of correction coefficient per beam_position', 
+    ax.set_title(ttle, 
                  fontsize=20)
     ax.set_xlabel('Beam Position', fontsize=20)
     ax.set_ylabel('Correction coefficient', fontsize=20)
