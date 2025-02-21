@@ -71,10 +71,11 @@ nc_files = [
 gc.collect()
 #%%
 print('********* The group data *********')
+var2process = 'temp_11_0um_nom'
 
 start_time = time.time()
 
-print('processing group data for temp_11_0um_nom')
+print(f'processing group data for {var2process}')
 
 for season in seasonal_files.keys():
     # Process each season individually
@@ -82,8 +83,9 @@ for season in seasonal_files.keys():
     season_files = seasonal_files[season]
 
     print(f"Processing season: {season} with {len(season_files)} files")
+
     group_array_df_dict, group_array_data_minmax_dict = process_group_data_by_hemisphere_season_latitude_df_method(
-                                    'temp_11_0um_nom', season_files, season)
+                                    var2process, season_files, season)
 
     gc.collect()
 
