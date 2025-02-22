@@ -71,7 +71,7 @@ nc_files = [
 gc.collect()
 #%%
 print('********* The group data *********')
-var2process = 'temp_11_0um_nom'
+var2process = 'temp_12_0um_nom'
 var_nme_sve = var2process.replace('_0um_nom','')
 start_time = time.time()
 
