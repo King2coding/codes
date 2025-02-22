@@ -2,15 +2,16 @@
 # import packages
 from util_functions import *
 from plot_functions import *
+from collections import defaultdict
 
 #%%
-base_path = "/ra1/pubdat/AVHRR_CloudSat_proj/AVHRR/1998-2000/l2_subsets/1e132ab/noaa-14"  # Replace with your actual path
-df_dir = r'/home/kkumah/Projects/AVHRR_IR-TB_correction/results/df'
-plot_dir = r'/home/kkumah/Projects/AVHRR_IR-TB_correction/results/plots'
-cor_dir =r'/ra1/pubdat/AVHRR_CloudSat_proj/AVHRR/1998-2000/corrected'
+all_noaa_data = r'/ra1/pubdat/AVHRR_CloudSat_proj/AVHRR_AutoSnow_collocated_1998_2000_for_Kingsley'
+
+df_dir = r'/home/kkumah/Projects/AVHRR_IR-TB_correction/results/df/Feb2025'
+plot_dir = r'/home/kkumah/Projects/AVHRR_IR-TB_correction/results/plots/Feb2025'
+cor_dir =r'/ra1/pubdat/AVHRR_CloudSat_proj/AVHRR/1998-2000/all_corrected_avhrr'
 miscellaneous_dir = r'/home/kkumah/Projects/AVHRR_IR-TB_correction/miscellaneous'
-path_to_1998_n14_data = r'/ra1/pubdat/AVHRR_CloudSat_proj/AVHRR/frequency_analysis/data/avhrr/patmosx_l2_jan_1998/noaa-14/1998'
-summer_data = r'/ra1/pubdat/AVHRR_CloudSat_proj/AVHRR_1998_summer_for_Kingsley'
+
 #%%
 # floating variables
 """
@@ -19,35 +20,31 @@ summer_data = r'/ra1/pubdat/AVHRR_CloudSat_proj/AVHRR_1998_summer_for_Kingsley'
 2: snow-covered land
 3: ice
 """
-hemisphere_sh = "Southern"  # Change to 'Northern' for the Northern Hemisphere
-hemisphere_sh = "Northern"  # Change to 'Northern' for the Northern Hemisphere
+all_noaa_files = sorted([os.path.join(all_noaa_data, s) for s in os.listdir(all_noaa_data) if s.endswith('.nc')])
 
-years = sorted([int(i) for i in os.listdir(base_path)])
+file2run = next((f for f in all_noaa_files if "clavrx_NSS.GHRR.NJ.D98015.S1728.E1912.B156" in f), None)
 
-search_dir = os.path.join(base_path,str(years[0]))
+# Organize files by season and hemisphere
 # Organize folders into seasons based on SH
-seasons = organize_by_season_with_hemisphere(search_dir, hemisphere_sh, years[0])
+# Using the Southern Hemisphere (SH) to determine the seasons and corresponding files.
+# Note: The same files can be used to define the Northern Hemisphere (NH) seasons.
+# For example, summer in SH corresponds to winter in NH.
+seasonal_files = organize_files_by_season_in_hemisphere(all_noaa_files,'SH',1998)
 
-# Example: Load files for Summer
-# summer_files = load_files_for_season(search_dir, seasons["Summer"])
 
-seasonal_files = {}
-for season in seasons.keys():
-    seasonal_files[season] = load_files_for_season(search_dir, seasons[season])
+# read all LUTs
+all_lut_files = sorted([os.path.join(df_dir, s) for s in os.listdir(df_dir) if s.endswith('.csv')])
 
-summer_files = [os.path.join(summer_data,s) for s in os.listdir(summer_data) if s.endswith('.nc')] 
+# Initialize a nested dictionary
+all_lut = defaultdict(lambda: defaultdict(dict))
 
-file2run = next((f for f in summer_files if "clavrx_NSS.GHRR.NJ.D98015.S1728.E1912.B156" in f), None)
-
-cde_run_dte = str(date.today().strftime('%Y%m%d'))
-
-nc_files = [
-    os.path.join(dirpath, filename)
-    for dirpath, _, filenames in os.walk(path_to_1998_n14_data)
-    for filename in filenames if filename.endswith(".nc")
-]
-
-sh_lat_wind, nh_lat_wind = (-75,-61), (61,75)
+for file_path in all_lut_files:
+    file_name = os.path.basename(file_path)
+    parts = file_name.split('_')
+    var = parts[0] + '_' + parts[1]
+    hemisphere = parts[2]
+    season = parts[3]
+    all_lut[var][hemisphere][season] = pd.read_csv(file_path)
 
 #%%
 print('********* The group data *********')

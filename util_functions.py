@@ -176,14 +176,14 @@ def find_season(month, hemisphere):
         print('Invalid selection. Please select a hemisphere and try again')
 #----------------------------------------------
 
-def organize_files_by_season_in_hemisphere(file_list, hemisphere='SH', year=2023):
+def organize_files_by_season_in_hemisphere(file_list, hemisphere='SH', year=None):
     """
     Organize files by season based on the day of the year and hemisphere.
     
     Parameters:
     file_list (list): List of file paths to be organized.
     hemisphere (str): Hemisphere to organize files by ('SH' for Southern Hemisphere, 'NH' for Northern Hemisphere).
-    year (int): Year to calculate the month from the day of the year.
+    year (int or None): Year to calculate the month from the day of the year. If None, consider multiple years (1998 to 2000).
     
     Returns:
     dict: Dictionary with seasons as keys and lists of file paths as values.
@@ -191,20 +191,39 @@ def organize_files_by_season_in_hemisphere(file_list, hemisphere='SH', year=2023
     # Initialize a dictionary to store files by season
     seasonal_files = {'Summer': [], 'Autumn': [], 'Winter': [], 'Spring': []}
 
-    # Check if the year is a leap year
-    is_leap_year = (year % 4 == 0 and year % 100 != 0) or (year % 400 == 0)
+    # Define a function to extract the year and day of the year from the file name
+    def extract_year_and_doy(file_name):
+        parts = file_name.split('.')
+        d_parts = [part for part in parts if part.startswith('D')]
+        if len(d_parts) == 0:
+            raise ValueError(f"File name {file_name} is not in the expected format.")
+        year_prefix = d_parts[0][1:3]
+        day_of_year = int(d_parts[0][3:6])
+        year = 1900 + int(year_prefix) if int(year_prefix) >= 98 else 2000 + int(year_prefix)
+        return year, day_of_year
 
     # Iterate over each file in the list
     for file in file_list:
-        # Extract the day of the year from the file name
-        day_of_year = int(file.split('D98')[1][:3])
+        # Extract the year and day of the year from the file name
+        file_year, day_of_year = extract_year_and_doy(file)
+        
+        # If a specific year is provided, skip files not matching the year
+        if year is not None and file_year != year:
+            continue
+        
+        # Check if the year is a leap year
+        is_leap_year = (file_year % 4 == 0 and file_year % 100 != 0) or (file_year % 400 == 0)
+        
         # Adjust for leap year if necessary
         if is_leap_year and day_of_year > 59:
             day_of_year -= 1
+        
         # Calculate the month from the day of the year
-        month = calculate_month(day_of_year, year)
+        month = calculate_month(day_of_year, file_year)
+        
         # Determine the season for the given month and hemisphere
         season = find_season(month, 'Southern' if hemisphere == 'SH' else 'Northern')
+        
         # Append the file to the corresponding season list
         seasonal_files[season].append(file)
     
