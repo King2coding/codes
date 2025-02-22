@@ -20,6 +20,8 @@ all_noaa_data = r'/ra1/pubdat/AVHRR_CloudSat_proj/AVHRR_AutoSnow_collocated_1998
 2: snow-covered land
 3: ice
 """
+# years = sorted([int(i) for i in os.listdir(base_path)])
+
 # Select 1998 NOAA-14 files identified by "NJ" in the file name
 all_noaa_files = sorted([
     os.path.join(all_noaa_data, s) 
@@ -28,8 +30,6 @@ all_noaa_files = sorted([
 ])
 
 # organize file by seasons and hemisphere
-
-
 # Organize files by season and hemisphere
 seasonal_files = organize_files_by_season_in_hemisphere(all_noaa_files,'SH',1998)
 
@@ -37,7 +37,6 @@ seasonal_files = organize_files_by_season_in_hemisphere(all_noaa_files,'SH',1998
 # hemisphere_sh = "Southern"  # Change to 'Northern' for the Northern Hemisphere
 # # hemisphere_sh = "Northern"  # Change to 'Northern' for the Northern Hemisphere
 
-# years = sorted([int(i) for i in os.listdir(base_path)])
 
 # search_dir = os.path.join(base_path,str(years[0]))
 # # Organize folders into seasons based on SH
@@ -116,7 +115,7 @@ for season in seasonal_files.keys():
     # Iterate over the keys in the hem_luts_by_srftyp dictionary
     for key, value in hem_luts_by_srftyp.items():
         # print(key)
-        lat_w = key.split('_')[2]
+        # lat_w = key.split('_')[2]
         # Extract the hemisphere and season from the key
         hemisphere, season = key.split('_')[0], key.split('_')[1]
 
@@ -128,8 +127,8 @@ for season in seasonal_files.keys():
             data_dict[new_key] = []
 
         # Set the 'latitude_bin' column in each DataFrame
-        for df in value:
-            value[df]['latitude_bin'] = lat_w
+        # for df in value:
+        #     value[df]['latitude_bin'] = lat_w
 
         # Concatenate the DataFrames within the key and append to the data_dict list
         data_dict[new_key].append(pd.concat(value, ignore_index=True))
