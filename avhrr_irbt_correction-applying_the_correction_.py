@@ -33,7 +33,7 @@ seasonal_files = organize_files_by_season_in_hemisphere(all_noaa_files,'SH',1998
 
 
 # read all LUTs
-all_lut_files = sorted([os.path.join(df_dir, s) for s in os.listdir(df_dir) if s.endswith('.csv')])
+all_lut_files = sorted([os.path.join(df_dir, s) for s in os.listdir(df_dir) if (s.endswith('20.csv') or s.endswith('21.csv'))])
 
 # Initialize a nested dictionary
 all_lut = defaultdict(lambda: defaultdict(dict))
@@ -122,18 +122,18 @@ for seas, seasn_files in seasonal_files.items():
         # corrected_tb_11[i_indices, j_indices] = original_tb_11_values * corrections_11
         # corrected_tb_12[i_indices, j_indices] = original_tb_12_values * corrections_12
 
-        for i, j in valid_indices:
-            if j in limb_beam_positions:
+        for i, j in valid_valid_indices:
+            # if j in limb_beam_positions:
 
-                lat = lats[i, j]
-                original_tb = brightness_temp_11[i, j]
-                surface_type_val = surfact_type[i, j]
+            lat = lats[i, j]
+            original_tb = brightness_temp_11[i, j]
+            surface_type_val = surfact_type[i, j]
 
-                # print(j, original_tb, surface_type_val, lat_wind_)
+            # print(j, original_tb, surface_type_val, lat_wind_)
 
-                # Apply correction using the lookup table
-                correction = get_correction(str(lat_window), int(j), surface_type_val, original_tb, lut_11_nh_sh)
-                corrected_tb_11[i, j] = original_tb * correction  # Apply correction
+            # Apply correction using the lookup table
+            correction = get_correction(str(lat_window), int(j), surface_type_val, original_tb, lut_11_nh_sh)
+            corrected_tb_11[i, j] = original_tb * correction  # Apply correction
 
 
 
