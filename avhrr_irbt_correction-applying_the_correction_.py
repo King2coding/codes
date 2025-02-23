@@ -48,6 +48,123 @@ for file_path in all_lut_files:
 
 #%%
 
+luts_11_nh, luts_11_sh = all_lut['temp_11']['NH'], all_lut['temp_11']['SH']
+luts_12_nh, luts_12_sh = all_lut['temp_12']['NH'], all_lut['temp_12']['SH']
+
+
+for seas, seasn_files in seasonal_files.items():
+    print(f"Season: {seas}")  
+
+    start_time = time.time()
+    sh_seasn = seas
+    nh_seasn = {
+            'Summer': 'Winter',
+            'Autumn': 'Spring',
+            'Winter': 'Summer',
+            'Spring': 'Autumn'
+        }[seas]
+
+    # get the lut needed for the season
+
+    lut_11_nh_sh = pd.concat([luts_11_nh[nh_seasn], luts_11_sh[sh_seasn]], ignore_index=True)
+    lut_12_nh_sh = pd.concat([luts_12_nh[nh_seasn], luts_12_sh[sh_seasn]], ignore_index=True)
+
+    lat_windows = [tuple(map(int, lat.strip('()').split(','))) for lat in lut_11_nh_sh['latitude_bin'].unique()]
+    
+    dataset = xr.open_dataset(file2run)
+    lats = dataset['latitude'].data
+    cloud_probs = dataset['cloud_probability'].data
+    cloud_probs_msk = np.where(cloud_probs >= 0.5, cloud_probs, np.nan)
+    surfact_type = dataset['land_class'].data
+    brightness_temp_11 = dataset['temp_11_0um_nom'].data
+    brightness_temp_12 = dataset['temp_12_0um_nom'].data
+    corrected_tb_11 = brightness_temp_11.copy()  # Copy original data for corrections
+    corrected_tb_12 = brightness_temp_12.copy()  # Copy original data for corrections
+
+    for lat_window in lat_windows:
+        lat_wind_ = f"{lat_window[0]}-{lat_window[1]}"
+        max_lat, min_lat = max(lat_window), min(lat_window)
+        lat_msk = ((lats >= min_lat) & (lats <= max_lat))
+
+        valid_mask = (
+            lat_msk &
+            (~np.isnan(cloud_probs_msk)) &
+            (~np.isnan(brightness_temp_11)) &
+            (~np.isnan(brightness_temp_12)) &
+            (~np.isnan(surfact_type))
+        )
+        # Get the indices where the mask is True
+        valid_indices = np.argwhere(valid_mask)
+
+        # Filter valid_indices to include only those where j is in limb_beam_positions
+        valid_valid_indices = [index for index in valid_indices if index[1] in limb_beam_positions]
+
+        # Vectorized approach for faster processing
+        # valid_valid_indices = np.array(valid_valid_indices)
+        # i_indices = valid_valid_indices[:, 0]
+        # j_indices = valid_valid_indices[:, 1]
+
+        # lat_values = lats[i_indices, j_indices]
+        # original_tb_11_values = brightness_temp_11[i_indices, j_indices]
+        # original_tb_12_values = brightness_temp_12[i_indices, j_indices]
+        # surface_type_values = surfact_type[i_indices, j_indices]
+
+        # corrections_11 = np.array([
+        #     get_correction(lat_wind_, int(j), surf_type, tb, lut_11_nh_sh)
+        #     for j, surf_type, tb in zip(j_indices, surface_type_values, original_tb_11_values)
+        # ])
+
+        # corrections_12 = np.array([
+        #     get_correction(lat_wind_, int(j), surf_type, tb, lut_12_nh_sh)
+        #     for j, surf_type, tb in zip(j_indices, surface_type_values, original_tb_12_values)
+        # ])
+
+        # corrected_tb_11[i_indices, j_indices] = original_tb_11_values * corrections_11
+        # corrected_tb_12[i_indices, j_indices] = original_tb_12_values * corrections_12
+
+        for i, j in valid_indices:
+            if j in limb_beam_positions:
+
+                lat = lats[i, j]
+                original_tb = brightness_temp_11[i, j]
+                surface_type_val = surfact_type[i, j]
+
+                # print(j, original_tb, surface_type_val, lat_wind_)
+
+                # Apply correction using the lookup table
+                correction = get_correction(str(lat_window), int(j), surface_type_val, original_tb, lut_11_nh_sh)
+                corrected_tb_11[i, j] = original_tb * correction  # Apply correction
+
+
+
+            
+
+        # Apply correction using the lookup table
+
+    # Save the corrected data to a new NetCDF file
+    data_outfile = os.path.join(cor_dir, os.path.basename(file2run.replace('.nc', '_cor_again_final.nc')))
+    save_corrected_dataset_v2(dataset, corrected_tb_11, corrected_tb_12, data_outfile)
+
+    # Apply the correction
+    # corrected_arrays, observed_arrays = process_files_in_parallel(
+    #     seasn_files, [(53,61),(-53,-61)], lookup_df=lut_full,
+    #     limb_beam_positions=limb_beam_positions, cor_dir=cor_dir
+    # )
+    # End time of code
+    end_time = time.time()
+    # Compute elapsed time
+    elapsed_seconds = end_time - start_time
+    elapsed_minutes = elapsed_seconds / 60
+    elapsed_hours = elapsed_seconds / 3600
+    # Print results
+    print(f"Completed processing for {seas} season")
+    print('************************' * 100)
+    print('************************' * 100)
+    print('************************' * 100)
+    print(f"Elapsed time for applying correction: {elapsed_seconds:.2f} seconds "
+        f"({elapsed_minutes:.2f} minutes) ({elapsed_hours:.5f} hours)")
+    
+
 
 #%%
 print('********* The group data *********')

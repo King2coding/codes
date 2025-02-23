@@ -1576,7 +1576,6 @@ def adjust_limb_bins_bob_method(nadir_bins, nadir_hist, limb_bins, limb_hist):
     return np.array(adjusted_limb_bins), nadir_hist_scaled
 #------------------------------------------
 
-
 def adjust_limb_bins_bob_method_upgraded(nadir_bins, nadir_hist, limb_bins, limb_hist):
     """
     Adjusts limb bins to match nadir bins using the method described by Bob,
@@ -1708,7 +1707,7 @@ def get_correction(latwind,beam, surf_type, obs_temp, LUT):
     # filt =filt[(filt['latitude'] == lat_bin)].reset_index()
     # Subset the data based on the provided latitude window (latwind)
     # lat_win = f"{latwind[0]}-{latwind[1]}"
-    filt = filt[filt['latitude_bin'] == latwind].reset_index(drop=True)
+    filt = filt[filt['latitude_bin'] == str(latwind)].reset_index(drop=True)
 
     # Find the closest matching beam position
     beam_key = filt['beam_position'].iloc[(filt['beam_position'] - beam).abs().idxmin()]
@@ -1806,18 +1805,20 @@ def apply_lut_corrections_fast(datafile, lat_windows, LUT, outdir):
         # Get the indices where the mask is True
         valid_indices = np.argwhere(valid_mask)
 
+        valid_valid_indices = [index for index in valid_indices if index[1] in limb_beam_positions]
+
         # Loop only over valid indices
-        for i, j in valid_indices:
-            if j in limb_beam_positions:
-                lat = lats[i, j]
-                original_tb = brightness_temp[i, j]
-                surface_type_val = surfact_type[i, j]
+        for i, j in valid_valid_indices:
+            # if j in limb_beam_positions:
+            lat = lats[i, j]
+            original_tb = brightness_temp[i, j]
+            surface_type_val = surfact_type[i, j]
 
-                # print(j, original_tb, surface_type_val, lat_wind_)
+            # print(j, original_tb, surface_type_val, lat_wind_)
 
-                # Apply correction using the lookup table
-                correction = get_correction(lat_wind_, int(j), surface_type_val, original_tb, LUT)
-                corrected_tb[i, j] = original_tb * correction  # Apply correction
+            # Apply correction using the lookup table
+            correction = get_correction(lat_wind_, int(j), surface_type_val, original_tb, LUT)
+            corrected_tb[i, j] = original_tb * correction  # Apply correction
 
     # Save the corrected data to a new NetCDF file
     data_outfile = os.path.join(outdir, os.path.basename(datafile.replace('.nc', '_cor_.nc')))
@@ -1826,6 +1827,101 @@ def apply_lut_corrections_fast(datafile, lat_windows, LUT, outdir):
     return corrected_tb
 
 #------------------------------------------
+
+def apply_lut_corrections_Fastv2(datafile, lat_windows, LUT_11, LUT_12, outdir):
+    """
+    Apply corrections to brightness temperatures based on LUT and multiple conditions.
+
+    Parameters:
+    - datafile: Input file to be adjusted.
+    - lat_windows: List of latitude windows for NH and SH.
+    - LUT_11: Lookup table for temp_11_0um_nom.
+    - LUT_12: Lookup table for temp_12_0um_nom.
+    - outdir: Output directory for corrected files.
+
+    Returns:
+    - corrected_tb_11: Corrected brightness temperatures for temp_11_0um_nom.
+    - corrected_tb_12: Corrected brightness temperatures for temp_12_0um_nom.
+    """
+    dataset = xr.open_dataset(datafile)
+    lats = dataset['latitude'].data
+    cloud_probs = dataset['cloud_probability'].data
+    cloud_probs_msk = np.where(cloud_probs >= 0.5, cloud_probs, np.nan)
+    surfact_type = dataset['land_class'].data
+    brightness_temp_11 = dataset['temp_11_0um_nom'].data
+    brightness_temp_12 = dataset['temp_12_0um_nom'].data
+    corrected_tb_11 = brightness_temp_11.copy()  # Copy original data for corrections
+    corrected_tb_12 = brightness_temp_12.copy()  # Copy original data for corrections
+
+    for lat_window in lat_windows:
+        lat_wind_ = f"{lat_window[0]}-{lat_window[1]}"
+        max_lat, min_lat = max(lat_window), min(lat_window)
+        lat_msk = ((lats >= min_lat) & (lats <= max_lat))
+
+        valid_mask = (
+            lat_msk &
+            (~np.isnan(cloud_probs_msk)) &
+            (~np.isnan(brightness_temp_11)) &
+            (~np.isnan(brightness_temp_12)) &
+            (~np.isnan(surfact_type))
+        )
+        # Get the indices where the mask is True
+        valid_indices = np.argwhere(valid_mask)
+
+        # Filter valid_indices to include only those where j is in limb_beam_positions
+        valid_valid_indices = [index for index in valid_indices if index[1] in limb_beam_positions]
+
+        # Vectorized approach for faster processing
+        valid_valid_indices = np.array(valid_valid_indices)
+        i_indices = valid_valid_indices[:, 0]
+        j_indices = valid_valid_indices[:, 1]
+
+        lat_values = lats[i_indices, j_indices]
+        original_tb_11_values = brightness_temp_11[i_indices, j_indices]
+        original_tb_12_values = brightness_temp_12[i_indices, j_indices]
+        surface_type_values = surfact_type[i_indices, j_indices]
+
+        corrections_11 = np.array([
+            get_correction(lat_wind_, int(j), surf_type, tb, LUT_11)
+            for j, surf_type, tb in zip(j_indices, surface_type_values, original_tb_11_values)
+        ])
+
+        corrections_12 = np.array([
+            get_correction(lat_wind_, int(j), surf_type, tb, LUT_12)
+            for j, surf_type, tb in zip(j_indices, surface_type_values, original_tb_12_values)
+        ])
+
+        corrected_tb_11[i_indices, j_indices] = original_tb_11_values * corrections_11
+        corrected_tb_12[i_indices, j_indices] = original_tb_12_values * corrections_12
+
+    # Save the corrected data to a new NetCDF file
+    data_outfile = os.path.join(outdir, os.path.basename(datafile.replace('.nc', '_cor_.nc')))
+    save_corrected_dataset_v2(dataset, corrected_tb_11, corrected_tb_12, data_outfile)
+
+    return corrected_tb_11, corrected_tb_12
+
+# Function save corrected data to NetCDF
+def save_corrected_dataset_v2(dataset, corrected_tb_11, corrected_tb_12, output_file):  
+    cor_obs_diff_11 = corrected_tb_11 - dataset['temp_11_0um_nom'].data  
+    cor_obs_diff_12 = corrected_tb_12 - dataset['temp_12_0um_nom'].data  
+    dataset['temp_11_0um_nom_corrected'] = (dataset['temp_11_0um_nom'].dims, corrected_tb_11)
+    dataset['temp_12_0um_nom_corrected'] = (dataset['temp_12_0um_nom'].dims, corrected_tb_12)
+    dataset['temp_11_0um_nom_cor_obs_diff'] = (dataset['temp_11_0um_nom'].dims, cor_obs_diff_11)
+    dataset['temp_12_0um_nom_cor_obs_diff'] = (dataset['temp_12_0um_nom'].dims, cor_obs_diff_12)
+    # Apply compression to all variables
+    encoding = {var: {'zlib': True, 'complevel': 9} for var in dataset.data_vars}
+    encoding.update({
+        'temp_11_0um_nom_corrected': {'zlib': True, 'complevel': 9},
+        'temp_12_0um_nom_corrected': {'zlib': True, 'complevel': 9},
+        'temp_11_0um_nom_cor_obs_diff': {'zlib': True, 'complevel': 9},
+        'temp_12_0um_nom_cor_obs_diff': {'zlib': True, 'complevel': 9}
+    })
+    
+    dataset.to_netcdf(output_file, mode='w', encoding=encoding)
+    return dataset.close()
+
+#------------------------------------------
+
 def process_index(index, brightness_temp, surfact_type, lat_wind_, LUT):
     i, j = index
     if j in limb_beam_positions:
