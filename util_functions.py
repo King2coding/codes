@@ -25,6 +25,9 @@ from scipy import stats
 from scipy.stats import binned_statistic
 from concurrent.futures import ProcessPoolExecutor
 
+import multiprocessing as mp
+
+
 #%%
 # flaoting variables
 beam_positions = np.array(range(409))
@@ -1936,7 +1939,7 @@ def process_index(index, brightness_temp, surfact_type, lat_wind_, LUT):
 def process_index_helper(index, brightness_temp, surfact_type, lat_wind_, LUT):
     return process_index(index, brightness_temp, surfact_type, lat_wind_, LUT)
 
-def apply_lut_corrections_fast_v2(datafile, lat_windows, LUT, outdir):
+def apply_lut_corrections_fast_parallel(datafile, lat_windows, LUT, outdir):
     """
     Apply corrections to brightness temperatures based on LUT and multiple conditions.
 
@@ -2074,3 +2077,82 @@ def process_files_in_parallel(summer_files, lat_windows, lookup_df, limb_beam_po
                 print(f"Processed {idx + 1}/{len(summer_files)}: {filename}")
 
     return corrected_arrays, observed_arrays
+
+#%%
+# main fucntion calls eventaually used in applying the correction
+def process_pixel_v2(args):
+    i, j, brightness_temp_11, brightness_temp_12, surfact_type, lut_11_nh_sh, lut_12_nh_sh, lat_window = args
+    temp_11_tb = brightness_temp_11[i, j]
+    temp_12_tb = brightness_temp_12[i, j]
+    surface_type_val = surfact_type[i, j]
+    temp_11_cor_coeff = get_correction(str(lat_window), int(j), surface_type_val, temp_11_tb, lut_11_nh_sh)
+    temp_12_cor_coeff = get_correction(str(lat_window), int(j), surface_type_val, temp_12_tb, lut_12_nh_sh)
+    return (i, j, temp_11_tb * temp_11_cor_coeff, temp_12_tb * temp_12_cor_coeff)
+#------------------------------------------
+
+def process_file_v2(file_of_season, lut_11_nh_sh, lut_12_nh_sh, lat_windows, cor_dir):
+    dataset = xr.open_dataset(file_of_season)
+    lats = dataset['latitude'].data
+    cloud_probs = dataset['cloud_probability'].data
+    cloud_probs_msk = np.where(cloud_probs >= 0.5, cloud_probs, np.nan)
+    surfact_type = dataset['land_class'].data
+    brightness_temp_11 = dataset['temp_11_0um_nom'].data
+    brightness_temp_12 = dataset['temp_12_0um_nom'].data
+    corrected_tb_11 = brightness_temp_11.copy()
+    corrected_tb_12 = brightness_temp_12.copy()
+
+    for lat_window in lat_windows:
+        max_lat, min_lat = max(lat_window), min(lat_window)
+        lat_msk = ((lats >= min_lat) & (lats <= max_lat))
+        valid_mask = (
+            lat_msk &
+            (~np.isnan(cloud_probs_msk)) &
+            (~np.isnan(brightness_temp_11)) &
+            (~np.isnan(brightness_temp_12)) &
+            (~np.isnan(surfact_type))
+        )
+        valid_indices = np.argwhere(valid_mask)
+        valid_valid_indices = [index for index in valid_indices if index[1] in limb_beam_positions]
+
+        with mp.Pool(6) as pool:
+            results = pool.map(process_pixel_v2, [(i, j, brightness_temp_11, brightness_temp_12, surfact_type, lut_11_nh_sh, lut_12_nh_sh, lat_window) for i, j in valid_valid_indices])
+
+        for i, j, corrected_11, corrected_12 in results:
+            corrected_tb_11[i, j] = corrected_11
+            corrected_tb_12[i, j] = corrected_12
+
+    data_outfile = os.path.join(cor_dir, os.path.basename(file_of_season.replace('.nc', '_cor.nc')))
+    save_corrected_dataset_v2(dataset, corrected_tb_11, corrected_tb_12, data_outfile)
+#------------------------------------------
+
+def process_season_v2(seas, seasn_files, all_lut):
+    print(f"Season: {seas}")
+    start_time = time.time()
+    sh_seasn = seas
+    nh_seasn = {
+        'Summer': 'Winter',
+        'Autumn': 'Spring',
+        'Winter': 'Summer',
+        'Spring': 'Autumn'
+    }[seas]
+
+    luts_11_nh, luts_11_sh = all_lut['temp_11']['NH'], all_lut['temp_11']['SH']
+    luts_12_nh, luts_12_sh = all_lut['temp_12']['NH'], all_lut['temp_12']['SH']
+
+    lut_11_nh_sh = pd.concat([luts_11_nh[nh_seasn], luts_11_sh[sh_seasn]], ignore_index=True)
+    lut_12_nh_sh = pd.concat([luts_12_nh[nh_seasn], luts_12_sh[sh_seasn]], ignore_index=True)
+    lat_windows = [tuple(map(int, lat.strip('()').split(','))) for lat in lut_11_nh_sh['latitude_bin'].unique()]
+
+    with mp.Pool(6) as pool:
+        pool.starmap(process_file_v2, [(file_of_season, lut_11_nh_sh, lut_12_nh_sh, lat_windows) for file_of_season in seasn_files])
+
+    end_time = time.time()
+    elapsed_seconds = end_time - start_time
+    elapsed_minutes = elapsed_seconds / 60
+    elapsed_hours = elapsed_seconds / 3600
+    print(f"Completed processing for {seas} season")
+    print('************************' * 100)
+    print('************************' * 100)
+    print('************************' * 100)
+    print(f"Elapsed time for applying correction: {elapsed_seconds:.2f} seconds "
+          f"({elapsed_minutes:.2f} minutes) ({elapsed_hours:.5f} hours)")
