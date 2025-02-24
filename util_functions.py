@@ -1905,19 +1905,19 @@ def apply_lut_corrections_Fastv2(datafile, lat_windows, LUT_11, LUT_12, outdir):
 
 # Function save corrected data to NetCDF
 def save_corrected_dataset_v2(dataset, corrected_tb_11, corrected_tb_12, output_file):  
-    cor_obs_diff_11 = corrected_tb_11 - dataset['temp_11_0um_nom'].data  
-    cor_obs_diff_12 = corrected_tb_12 - dataset['temp_12_0um_nom'].data  
+    # cor_obs_diff_11 = corrected_tb_11 - dataset['temp_11_0um_nom'].data  
+    # cor_obs_diff_12 = corrected_tb_12 - dataset['temp_12_0um_nom'].data  
     dataset['temp_11_0um_nom_corrected'] = (dataset['temp_11_0um_nom'].dims, corrected_tb_11)
     dataset['temp_12_0um_nom_corrected'] = (dataset['temp_12_0um_nom'].dims, corrected_tb_12)
-    dataset['temp_11_0um_nom_cor_obs_diff'] = (dataset['temp_11_0um_nom'].dims, cor_obs_diff_11)
-    dataset['temp_12_0um_nom_cor_obs_diff'] = (dataset['temp_12_0um_nom'].dims, cor_obs_diff_12)
+    # dataset['temp_11_0um_nom_cor_obs_diff'] = (dataset['temp_11_0um_nom'].dims, cor_obs_diff_11)
+    # dataset['temp_12_0um_nom_cor_obs_diff'] = (dataset['temp_12_0um_nom'].dims, cor_obs_diff_12)
     # Apply compression to all variables
     encoding = {var: {'zlib': True, 'complevel': 9} for var in dataset.data_vars}
     encoding.update({
         'temp_11_0um_nom_corrected': {'zlib': True, 'complevel': 9},
         'temp_12_0um_nom_corrected': {'zlib': True, 'complevel': 9},
-        'temp_11_0um_nom_cor_obs_diff': {'zlib': True, 'complevel': 9},
-        'temp_12_0um_nom_cor_obs_diff': {'zlib': True, 'complevel': 9}
+        # 'temp_11_0um_nom_cor_obs_diff': {'zlib': True, 'complevel': 9},
+        # 'temp_12_0um_nom_cor_obs_diff': {'zlib': True, 'complevel': 9}
     })
     
     dataset.to_netcdf(output_file, mode='w', encoding=encoding)

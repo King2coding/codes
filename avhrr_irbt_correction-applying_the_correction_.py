@@ -55,7 +55,7 @@ for file_path in all_lut_files:
 #%%
 # main function calls eventually used in applying the correction
 if __name__ == "__main__":
-    with Pool(processes=10) as pool:
+    with Pool(processes=12) as pool:
         for season, files in seasonal_files.items():
             process_season_v2(season, files, all_lut, pool, cor_dir)
 #%%
