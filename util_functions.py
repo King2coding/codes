@@ -2090,7 +2090,7 @@ def process_pixel_v2(args):
     return (i, j, temp_11_tb * temp_11_cor_coeff, temp_12_tb * temp_12_cor_coeff)
 #------------------------------------------
 
-def process_file_v2(file_of_season, lut_11_nh_sh, lut_12_nh_sh, lat_windows, cor_dir):
+def process_file_v2(file_of_season, lut_11_nh_sh, lut_12_nh_sh, lat_windows, cor_dir, pool):
     dataset = xr.open_dataset(file_of_season)
     lats = dataset['latitude'].data
     cloud_probs = dataset['cloud_probability'].data
@@ -2114,8 +2114,7 @@ def process_file_v2(file_of_season, lut_11_nh_sh, lut_12_nh_sh, lat_windows, cor
         valid_indices = np.argwhere(valid_mask)
         valid_valid_indices = [index for index in valid_indices if index[1] in limb_beam_positions]
 
-        with mp.Pool(6) as pool:
-            results = pool.map(process_pixel_v2, [(i, j, brightness_temp_11, brightness_temp_12, surfact_type, lut_11_nh_sh, lut_12_nh_sh, lat_window) for i, j in valid_valid_indices])
+        results = pool.map(process_pixel_v2, [(i, j, brightness_temp_11, brightness_temp_12, surfact_type, lut_11_nh_sh, lut_12_nh_sh, lat_window) for i, j in valid_valid_indices])
 
         for i, j, corrected_11, corrected_12 in results:
             corrected_tb_11[i, j] = corrected_11
@@ -2125,8 +2124,8 @@ def process_file_v2(file_of_season, lut_11_nh_sh, lut_12_nh_sh, lat_windows, cor
     save_corrected_dataset_v2(dataset, corrected_tb_11, corrected_tb_12, data_outfile)
 #------------------------------------------
 
-def process_season_v2(seas, seasn_files, all_lut):
-    print(f"Season: {seas}")
+def process_season_v2(seas, seasn_files, all_lut, pool, cor_dir):
+    print(f"Starting processing for {seas} season")
     start_time = time.time()
     sh_seasn = seas
     nh_seasn = {
@@ -2143,8 +2142,8 @@ def process_season_v2(seas, seasn_files, all_lut):
     lut_12_nh_sh = pd.concat([luts_12_nh[nh_seasn], luts_12_sh[sh_seasn]], ignore_index=True)
     lat_windows = [tuple(map(int, lat.strip('()').split(','))) for lat in lut_11_nh_sh['latitude_bin'].unique()]
 
-    with mp.Pool(6) as pool:
-        pool.starmap(process_file_v2, [(file_of_season, lut_11_nh_sh, lut_12_nh_sh, lat_windows) for file_of_season in seasn_files])
+    for file_of_season in seasn_files:
+        process_file_v2(file_of_season, lut_11_nh_sh, lut_12_nh_sh, lat_windows, cor_dir, pool)
 
     end_time = time.time()
     elapsed_seconds = end_time - start_time
@@ -2152,7 +2151,7 @@ def process_season_v2(seas, seasn_files, all_lut):
     elapsed_hours = elapsed_seconds / 3600
     print(f"Completed processing for {seas} season")
     print('************************' * 100)
-    print('************************' * 100)
-    print('************************' * 100)
     print(f"Elapsed time for applying correction: {elapsed_seconds:.2f} seconds "
           f"({elapsed_minutes:.2f} minutes) ({elapsed_hours:.5f} hours)")
+    print(f"Elapsed time for applying correction: {elapsed_seconds:.2f} seconds "
+        f"({elapsed_minutes:.2f} minutes) ({elapsed_hours:.5f} hours)")
