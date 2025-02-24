@@ -103,6 +103,7 @@ def process_file_v2(file_of_season, lut_11_nh_sh, lut_12_nh_sh, lat_windows, cor
 #------------------------------------------
 
 def process_season_v2(seas, seasn_files, all_lut, pool):
+    print(f"Starting processing for {seas} season")
     start_time = time.time()
     sh_seasn = seas
     nh_seasn = {
@@ -134,53 +135,53 @@ def process_season_v2(seas, seasn_files, all_lut, pool):
         f"({elapsed_minutes:.2f} minutes) ({elapsed_hours:.5f} hours)")
 
 #%%
-print('********* doing plot_ir_tb_distribution_with_means dist plots now *********')
+# print('********* doing plot_ir_tb_distribution_with_means dist plots now *********')
 
-for hemisphere in ['NH', 'SH']:
-    # pull hemisphere data
-    obs_data_hem = observed_arrays[hemisphere]
-    cor_data_hem = corrected_arrays[hemisphere]
+# for hemisphere in ['NH', 'SH']:
+#     # pull hemisphere data
+#     obs_data_hem = observed_arrays[hemisphere]
+#     cor_data_hem = corrected_arrays[hemisphere]
 
-    # pull surface type data
-    for i in surface_type_mapping.keys():
-        sftype = surface_type_mapping[i]
-        obs_by_srftyp_array = obs_data_hem[i]
-        cor_by_srftyp_array = cor_data_hem[i]
+#     # pull surface type data
+#     for i in surface_type_mapping.keys():
+#         sftype = surface_type_mapping[i]
+#         obs_by_srftyp_array = obs_data_hem[i]
+#         cor_by_srftyp_array = cor_data_hem[i]
 
-        # Generate distribution with means
-        orig_hist_dist, org_bns, org_means = generate_distribution_with_means(obs_by_srftyp_array)
-        cor_hist_dist, cor_bns, cor_means = generate_distribution_with_means(cor_by_srftyp_array)
+#         # Generate distribution with means
+#         orig_hist_dist, org_bns, org_means = generate_distribution_with_means(obs_by_srftyp_array)
+#         cor_hist_dist, cor_bns, cor_means = generate_distribution_with_means(cor_by_srftyp_array)
 
-        #--------------------------------------------------------
-        # Plot the distributions using different plot methods 
-        savefig = f"{sftype}_{hemisphere}-percent_dist_by_LUT_normal_version_{cde_run_dte}.png"    
-        savefig  = os.path.join(plot_dir, savefig)
-        plot_ir_tb_distribution_with_means_normal_version(
-                                    orig_hist_dist, org_bns, org_means,
-                                    cor_hist_dist, cor_bns, cor_means,
-                                    beam_positions, savefig)
+#         #--------------------------------------------------------
+#         # Plot the distributions using different plot methods 
+#         savefig = f"{sftype}_{hemisphere}-percent_dist_by_LUT_normal_version_{cde_run_dte}.png"    
+#         savefig  = os.path.join(plot_dir, savefig)
+#         plot_ir_tb_distribution_with_means_normal_version(
+#                                     orig_hist_dist, org_bns, org_means,
+#                                     cor_hist_dist, cor_bns, cor_means,
+#                                     beam_positions, savefig)
 
-        #--------------------------------------------------------
+#         #--------------------------------------------------------
 
-        savefig = f"{sftype}_{hemisphere}-percent_dist_by_LUT_log_version_{cde_run_dte}.png"    
-        savefig  = os.path.join(plot_dir, savefig)
-        plot_ir_tb_distribution_with_means_log_version(
-                                    orig_hist_dist, org_bns, org_means,
-                                    cor_hist_dist, cor_bns, cor_means,
-                                    beam_positions, savefig)
-        #--------------------------------------------------------
+#         savefig = f"{sftype}_{hemisphere}-percent_dist_by_LUT_log_version_{cde_run_dte}.png"    
+#         savefig  = os.path.join(plot_dir, savefig)
+#         plot_ir_tb_distribution_with_means_log_version(
+#                                     orig_hist_dist, org_bns, org_means,
+#                                     cor_hist_dist, cor_bns, cor_means,
+#                                     beam_positions, savefig)
+#         #--------------------------------------------------------
 
-        savefig = f"{sftype}_{hemisphere}-percent_dist_by_LUT_discrete-log_version_{cde_run_dte}.png"
-        savefig  = os.path.join(plot_dir, savefig)
-        plot_ir_tb_distribution_with_means_discrete_log(
-                                    orig_hist_dist, org_bns, org_means,
-                                    cor_hist_dist, cor_bns, cor_means,
-                                    beam_positions, savefig)
-        #--------------------------------------------------------
+#         savefig = f"{sftype}_{hemisphere}-percent_dist_by_LUT_discrete-log_version_{cde_run_dte}.png"
+#         savefig  = os.path.join(plot_dir, savefig)
+#         plot_ir_tb_distribution_with_means_discrete_log(
+#                                     orig_hist_dist, org_bns, org_means,
+#                                     cor_hist_dist, cor_bns, cor_means,
+#                                     beam_positions, savefig)
+#         #--------------------------------------------------------
 
-        savefig = f"{sftype}_{hemisphere}-percent_dist_by_LUT_contourf_version_{cde_run_dte}.png"        
-        savefig  = os.path.join(plot_dir, savefig)
-        plot_discrete_ir_tb_distribution(
-                                    orig_hist_dist, org_bns, org_means,
-                                    cor_hist_dist, cor_bns, cor_means,
-                                    beam_positions, savefig)
+#         savefig = f"{sftype}_{hemisphere}-percent_dist_by_LUT_contourf_version_{cde_run_dte}.png"        
+#         savefig  = os.path.join(plot_dir, savefig)
+#         plot_discrete_ir_tb_distribution(
+#                                     orig_hist_dist, org_bns, org_means,
+#                                     cor_hist_dist, cor_bns, cor_means,
+#                                     beam_positions, savefig)
