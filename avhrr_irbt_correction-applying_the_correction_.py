@@ -4,6 +4,7 @@ from util_functions import *
 from plot_functions import *
 from collections import defaultdict
 from multiprocessing import Pool
+import multiprocessing as mp
 # from process_functions import process_season_v2  # Import the missing function
 
 #%%
@@ -53,11 +54,62 @@ for file_path in all_lut_files:
     all_lut[var][hemisphere][season] = pd.read_csv(file_path)
 
 #%%
-# main function calls eventually used in applying the correction
 if __name__ == "__main__":
-    with Pool(processes=12) as pool:
-        for season, files in seasonal_files.items():
-            process_season_v2(season, files, all_lut, pool, cor_dir)
+    num_processes = 4  # Explicitly use 4 cores, one per season
+    print(f"Using {num_processes} parallel processes")
+
+    with mp.Pool(processes=num_processes) as pool:
+        pool.starmap(process_season_vectorized, [(seas, seasn_files, all_lut, limb_beam_positions, cor_dir) 
+                                      for seas, seasn_files in seasonal_files.items()])
+
+#%%
+# main function calls eventually used in applying the correction
+# if __name__ == "__main__":
+#     with Pool(processes=12) as pool:
+#         for season, files in seasonal_files.items():
+#             process_season_v2(season, files, all_lut, pool, cor_dir)
+
+
+#%%
+# cor_dir =r'/ra1/pubdat/AVHRR_CloudSat_proj/AVHRR/1998-2000/corrected'
+
+# for seas, seasn_files in seasonal_files.items():
+#     sh_seasn = seas
+#     nh_seasn = {
+#         'Summer': 'Winter',
+#         'Autumn': 'Spring',
+#         'Winter': 'Summer',
+#         'Spring': 'Autumn'
+#     }[seas]
+
+#     luts_11_nh, luts_11_sh = all_lut['temp_11']['NH'], all_lut['temp_11']['SH']
+#     luts_12_nh, luts_12_sh = all_lut['temp_12']['NH'], all_lut['temp_12']['SH']
+
+#     lut_11_nh_sh = pd.concat([luts_11_nh[nh_seasn], luts_11_sh[sh_seasn]], ignore_index=True)
+#     lut_12_nh_sh = pd.concat([luts_12_nh[nh_seasn], luts_12_sh[sh_seasn]], ignore_index=True)
+#     lat_windows = [tuple(map(int, lat.strip('()').split(','))) for lat in lut_11_nh_sh['latitude_bin'].unique()]
+
+#     lut_11_nh_sh_dict, lut_12_nh_sh_dict = preprocess_lut(lut_11_nh_sh), preprocess_lut(lut_12_nh_sh)
+
+#     for file_of_season in seasn_files:
+#         print(f"Starting processing for {seas} season")
+#         start_time = time.time()
+#         process_file_vectorized(file_of_season, lat_windows,
+#                                 lut_11_nh_sh,lut_11_nh_sh_dict,
+#                                 lut_12_nh_sh,lut_12_nh_sh_dict,
+#                                 limb_beam_positions, cor_dir)
+        
+#         end_time = time.time()
+#         elapsed_seconds = end_time - start_time
+#         elapsed_minutes = elapsed_seconds / 60
+#         elapsed_hours = elapsed_seconds / 3600
+#         print(f"Completed processing for {seas} season")
+#         print('************************' * 100)
+#         print(f"Elapsed time for applying correction: {elapsed_seconds:.2f} seconds "
+#             f"({elapsed_minutes:.2f} minutes) ({elapsed_hours:.5f} hours)")
+#         print(f"Elapsed time for applying correction: {elapsed_seconds:.2f} seconds "
+#             f"({elapsed_minutes:.2f} minutes) ({elapsed_hours:.5f} hours)")
+
 #%%
 # print('********* doing plot_ir_tb_distribution_with_means dist plots now *********')
 

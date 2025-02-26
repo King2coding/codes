@@ -736,7 +736,7 @@ def process_file(file, ir_var, surface_type_elements, lat_window):
 
     return file_group_arrays_dict
 
-def get_group_data_parallel(files, ir_var, hem, seasn, lat_window):
+def get_group_data_parallel(files, ir_var, hem, seasn, lat_window,cor_dir):
     """
     Process a list of NetCDF files to extract and group infrared brightness temperature data 
     based on surface type and latitude window using parallel processing.
@@ -1730,6 +1730,62 @@ def get_correction(latwind,beam, surf_type, obs_temp, LUT):
     else:
         return None  # Return None if no match is found
 #------------------------------------------
+def get_correction2(latwind, beam, surf_type, obs_temp, LUT):
+    """
+    Find the correction coefficient from the LUT based on input parameters.
+    
+    Parameters:
+    latwind (numpy array): Latitude window values to search for.
+    beam (numpy array): Beam position values to search for.
+    surf_type (numpy array): Surface type values to search for.
+    obs_temp (numpy array): Observed temperature values to search for.
+    LUT (pd.DataFrame): The lookup table with correction coefficients.
+    
+    Returns:
+    numpy array: The correction coefficients.
+    """
+    # Create a copy of the LUT
+    filt = LUT.copy()
+    
+    # Find the closest matching latitude window
+    latwind_idx = np.array([np.where(filt['latitude_bin'].values == str(lat))[0][0] for lat in latwind])
+    filt = filt.iloc[latwind_idx]
+    
+    # Find the closest matching beam position
+    beam_idx = np.argmin(np.abs(filt['beam_position'].values[:, np.newaxis] - beam), axis=0)
+    filt = filt.iloc[beam_idx]
+    
+    # Find the closest matching surface type
+    surf_type_idx = np.argmin(np.abs(filt['surface_type'].values[:, np.newaxis] - surf_type), axis=0)
+    filt = filt.iloc[surf_type_idx]
+    
+    # Find the closest matching observed temperature
+    temp_bin_idx = np.argmin(np.abs(filt['original_tb'].values[:, np.newaxis] - obs_temp), axis=0)
+    filt = filt.iloc[temp_bin_idx]
+    
+    # Return the correction coefficient if a match is found
+    corr_coeff = filt['corr_coeff'].values
+    corr_coeff[filt.index.duplicated()] = None  # Set duplicates to None
+    return corr_coeff
+#------------------------------------------
+# Define a function to get the correction coefficient
+def get_correction_vctorized(latwind, beam, surf_type, obs_temp, LUT):
+    # Find the closest matching latitude window
+    latwind_idx = np.where(LUT['latitude_bin'].values == str(latwind))[0][0]
+    
+    # Find the closest matching beam position
+    beam_idx = np.argmin(np.abs(LUT['beam_position'].values - beam))
+    
+    # Find the closest matching surface type
+    surf_type_idx = np.argmin(np.abs(LUT['surface_type'].values - surf_type))
+    
+    # Find the closest matching observed temperature
+    temp_bin_idx = np.argmin(np.abs(LUT['original_tb'].values - obs_temp))
+    
+    # Return the correction coefficient
+    return LUT['corr_coeff'].values[latwind_idx, beam_idx, surf_type_idx, temp_bin_idx]
+
+#------------------------------------------
 # Apply corrections to the brightness temperature data
 def apply_lut_corrections_slow(datafile, beams, target_lat, tol, LUT):
     """
@@ -2003,6 +2059,21 @@ def save_corrected_dataset(dataset, corrected_tb, output_file):
     dataset.to_netcdf(output_file, mode='w', 
                       encoding={'temp_11_0um_nom_corrected': {'zlib': True, 'complevel': 5}})
     return dataset.close()
+
+#------------------------------------------
+
+def save_corrected_11_12_dataset(dataset, corrected_tb11, corrected_tb12, output_file):  
+    # cor_obs_diff11 = corrected_tb11 - dataset['temp_11_0um_nom'].data  
+    dataset['temp_11_0um_nom_corrected'] = (dataset['temp_11_0um_nom'].dims, corrected_tb11)
+    # dataset['temp_11_0um_nom_cor_obs_diff'] = (dataset['temp_11_0um_nom'].dims, cor_obs_diff11)
+
+    # cor_obs_diff12 = corrected_tb12 - dataset['temp_12_0um_nom'].data  
+    dataset['temp_12_0um_nom_corrected'] = (dataset['temp_12_0um_nom'].dims, corrected_tb12)
+    # dataset['temp_12_0um_nom_cor_obs_diff'] = (dataset['temp_12_0um_nom'].dims, cor_obs_diff12)
+    dataset.to_netcdf(output_file, mode='w', 
+                      encoding={'temp_11_0um_nom_corrected': {'zlib': True, 'complevel': 9},
+                                'temp_12_0um_nom_corrected': {'zlib': True, 'complevel': 9}})
+    return dataset.close()
 #------------------------------------------
 # Define a function for processing a single file
 def process_file(season_file, lat_windows, lookup_df, 
@@ -2021,7 +2092,7 @@ def process_file(season_file, lat_windows, lookup_df,
 
     for lat_window in lat_windows:
         max_lat, min_lat = max(lat_window), min(lat_window)
-        lat_mask = ((lats_ >= min_lat) & (lats_ <= max_lat))
+        lat_mask = ((lats_ > min_lat) & (lats_ <= max_lat))
         lat_mask = np.where(lat_mask == True, 1, np.nan)
 
         hemisphere = 'NH' if max_lat > 0 else 'SH'
@@ -2155,3 +2226,134 @@ def process_season_v2(seas, seasn_files, all_lut, pool, cor_dir):
           f"({elapsed_minutes:.2f} minutes) ({elapsed_hours:.5f} hours)")
     print(f"Elapsed time for applying correction: {elapsed_seconds:.2f} seconds "
         f"({elapsed_minutes:.2f} minutes) ({elapsed_hours:.5f} hours)")
+
+#----------------------------------------------
+def preprocess_lut(LUT):
+    """
+    Converts LUT DataFrame into a multi-index dictionary for fast lookup.
+    """
+    lut_dict = {}
+    for _, row in LUT.iterrows():
+        lat_bin = row['latitude_bin']
+        beam = row['beam_position']
+        surf_type = row['surface_type']
+        obs_temp = row['original_tb']
+        corr_coeff = row['corr_coeff']
+        lut_dict.setdefault(lat_bin, {}).setdefault(beam, {}).setdefault(surf_type, {})[obs_temp] = corr_coeff
+    return lut_dict
+#--------------------------------------------------------
+
+def get_correction_fast(latwind, beam, surf_type, obs_temp, lut_dict):
+    """
+    Fetch the correction coefficient from preprocessed LUT dictionary.
+    Logs cases where no correction is found.
+    """
+    try:
+        beam_dict = lut_dict.get(str(latwind), {})
+        surf_dict = beam_dict.get(int(beam), {}).get(surf_type, {})
+
+        if not surf_dict:
+            print(f"DEBUG: Missing correction for latwind={latwind}, beam={beam}, surf_type={surf_type}, obs_temp={obs_temp}")
+            return None  # Indicate no correction found
+        
+        temp_keys = np.array(list(surf_dict.keys()))  # Convert keys to array
+        
+        if temp_keys.size == 0:
+            print(f"DEBUG: Empty temperature keys for latwind={latwind}, beam={beam}, surf_type={surf_type}, obs_temp={obs_temp}")
+            return None
+        
+        temp_key = temp_keys[np.abs(temp_keys - obs_temp).argmin()]
+        return surf_dict[temp_key]
+    
+    except Exception as e:
+        print(f"ERROR: Exception in get_correction_fast for latwind={latwind}, beam={beam}, surf_type={surf_type}, obs_temp={obs_temp} | Error: {e}")
+        return None  # Safe return
+#--------------------------------------------------------
+def get_valid_indices_and_data(lat_window, surfact_type, brightness_temp, lut_df, lats, cloud_probs_msk, limb_beam_positions):
+    """
+    Extracts valid indices and corresponding brightness temperature, surface type, and j indices
+    for a given temperature channel and latitude window.
+    
+    Parameters:
+    - lat_window (tuple): Latitude range.
+    - surfact_type (ndarray): Surface type array.
+    - brightness_temp (ndarray): Brightness temperature array.
+    - lut_df (pd.DataFrame): Lookup table DataFrame for the specific channel.
+    - lats (ndarray): Latitude array.
+    - cloud_probs_msk (ndarray): Cloud probability mask.
+    - limb_beam_positions (set): Set of valid limb beam positions.
+
+    Returns:
+    - temp_tb (ndarray): Brightness temperature values for valid pixels.
+    - surface_type_val (ndarray): Surface type values for valid pixels.
+    - j_indices (ndarray): Beam position indices for valid pixels.
+    """
+    max_lat, min_lat = max(lat_window), min(lat_window)
+    lat_msk = (lats > min_lat) & (lats <= max_lat)
+
+    # Get valid surface types from the LUT for this latitude window
+    valid_surface_types = set(lut_df[lut_df['latitude_bin'] == str(lat_window)]['surface_type'].unique())
+
+    # Create valid mask
+    valid_mask = (
+        lat_msk &
+        np.isin(surfact_type, list(valid_surface_types)) &  # Mask valid surface types
+        (~np.isnan(cloud_probs_msk)) &
+        (~np.isnan(brightness_temp))
+    )
+
+    valid_indices = np.argwhere(valid_mask)
+    valid_valid_indices = valid_indices[np.isin(valid_indices[:, 1], limb_beam_positions)]
+
+    if valid_valid_indices.size == 0:
+        return None, None, None  # Skip processing if no valid indices found
+
+    # Extract valid indices
+    i_indices, j_indices = valid_valid_indices[:, 0], valid_valid_indices[:, 1]
+
+    # Extract brightness temperature and surface type values
+    temp_tb = brightness_temp[i_indices, j_indices]
+    surface_type_val = surfact_type[i_indices, j_indices]
+
+    return temp_tb, surface_type_val, i_indices,j_indices
+
+#--------------------------------------------------------
+def process_file_vectorized(file_run, lat_windows, 
+                            lut_11_nh_sh, lut_11_nh_sh_dict, 
+                            lut_12_nh_sh, lut_12_nh_sh_dict, 
+                            limb_beam_positions, cor_dir):
+    dataset = xr.open_dataset(file_run)
+    lats = dataset['latitude'].data
+    cloud_probs = dataset['cloud_probability'].data
+    cloud_probs_msk = np.where(cloud_probs >= 0.5, cloud_probs, np.nan)
+    surfact_type = dataset['land_class'].data
+    brightness_temp_11 = dataset['temp_11_0um_nom'].data
+    brightness_temp_12 = dataset['temp_12_0um_nom'].data
+    corrected_tb_11 = brightness_temp_11.copy()
+    corrected_tb_12 = brightness_temp_12.copy()
+
+    # Iterate over lat_windows
+    for lat_window in lat_windows:
+        # Process 11 µm channel
+        temp_11_tb, surface_type_val_11, i_indices_11, j_indices_11 = get_valid_indices_and_data(
+            lat_window, surfact_type, brightness_temp_11, lut_11_nh_sh, lats, cloud_probs_msk, limb_beam_positions
+        )
+
+        if temp_11_tb is not None:
+            correction_11 = np.vectorize(get_correction_fast)(str(lat_window), j_indices_11, surface_type_val_11, temp_11_tb, lut_11_nh_sh_dict)
+            corrected_tb_11[i_indices_11, j_indices_11] = temp_11_tb * correction_11
+
+        # Process 12 µm channel
+        temp_12_tb, surface_type_val_12, i_indices_12, j_indices_12 = get_valid_indices_and_data(
+            lat_window, surfact_type, brightness_temp_12, lut_12_nh_sh, lats, cloud_probs_msk, limb_beam_positions
+        )
+
+        if temp_12_tb is not None:
+            correction_12 = np.vectorize(get_correction_fast)(str(lat_window), j_indices_12, surface_type_val_12, temp_12_tb, lut_12_nh_sh_dict)
+            corrected_tb_12[i_indices_12,j_indices_12] = temp_12_tb * correction_12
+
+
+    outfile = os.path.join(cor_dir, os.path.basename(file_run).replace('.nc', '_corrected.nc'))
+
+    save_corrected_11_12_dataset(dataset, corrected_tb_11, corrected_tb_12, outfile)
+
