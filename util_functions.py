@@ -2061,20 +2061,6 @@ def save_corrected_dataset(dataset, corrected_tb, output_file):
     return dataset.close()
 
 #------------------------------------------
-
-def save_corrected_11_12_dataset(dataset, corrected_tb11, corrected_tb12, output_file):  
-    # cor_obs_diff11 = corrected_tb11 - dataset['temp_11_0um_nom'].data  
-    dataset['temp_11_0um_nom_corrected'] = (dataset['temp_11_0um_nom'].dims, corrected_tb11)
-    # dataset['temp_11_0um_nom_cor_obs_diff'] = (dataset['temp_11_0um_nom'].dims, cor_obs_diff11)
-
-    # cor_obs_diff12 = corrected_tb12 - dataset['temp_12_0um_nom'].data  
-    dataset['temp_12_0um_nom_corrected'] = (dataset['temp_12_0um_nom'].dims, corrected_tb12)
-    # dataset['temp_12_0um_nom_cor_obs_diff'] = (dataset['temp_12_0um_nom'].dims, cor_obs_diff12)
-    dataset.to_netcdf(output_file, mode='w', 
-                      encoding={'temp_11_0um_nom_corrected': {'zlib': True, 'complevel': 9},
-                                'temp_12_0um_nom_corrected': {'zlib': True, 'complevel': 9}})
-    return dataset.close()
-#------------------------------------------
 # Define a function for processing a single file
 def process_file(season_file, lat_windows, lookup_df, 
                  limb_beam_positions, cor_dir):
@@ -2226,6 +2212,20 @@ def process_season_v2(seas, seasn_files, all_lut, pool, cor_dir):
           f"({elapsed_minutes:.2f} minutes) ({elapsed_hours:.5f} hours)")
     print(f"Elapsed time for applying correction: {elapsed_seconds:.2f} seconds "
         f"({elapsed_minutes:.2f} minutes) ({elapsed_hours:.5f} hours)")
+
+#----------------------------------------------
+def save_corrected_11_12_dataset(dataset, corrected_tb11, corrected_tb12, output_file):  
+    # cor_obs_diff11 = corrected_tb11 - dataset['temp_11_0um_nom'].data  
+    dataset['temp_11_0um_nom_corrected'] = (dataset['temp_11_0um_nom'].dims, corrected_tb11)
+    # dataset['temp_11_0um_nom_cor_obs_diff'] = (dataset['temp_11_0um_nom'].dims, cor_obs_diff11)
+
+    # cor_obs_diff12 = corrected_tb12 - dataset['temp_12_0um_nom'].data  
+    dataset['temp_12_0um_nom_corrected'] = (dataset['temp_12_0um_nom'].dims, corrected_tb12)
+    # dataset['temp_12_0um_nom_cor_obs_diff'] = (dataset['temp_12_0um_nom'].dims, cor_obs_diff12)
+    dataset.to_netcdf(output_file, mode='w', 
+                      encoding={'temp_11_0um_nom_corrected': {'zlib': True, 'complevel': 9},
+                                'temp_12_0um_nom_corrected': {'zlib': True, 'complevel': 9}})
+    return dataset.close()
 
 #----------------------------------------------
 def preprocess_lut(LUT):
