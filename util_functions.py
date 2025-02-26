@@ -2357,3 +2357,42 @@ def process_file_vectorized(file_run, lat_windows,
 
     save_corrected_11_12_dataset(dataset, corrected_tb_11, corrected_tb_12, outfile)
 
+#--------------------------------------------------------
+def process_season_vectorized(seas, seasn_files, all_lut, limb_beam_positions, cor_dir):
+    """
+    Processes a single season's data in parallel.
+    This function is meant to be run in parallel using multiprocessing.
+    """
+    print(f"Starting processing for {seas} season")
+    start_time = time.time()
+
+    sh_seasn = seas
+    nh_seasn = {'Summer': 'Winter', 'Autumn': 'Spring', 'Winter': 'Summer', 'Spring': 'Autumn'}[seas]
+
+    # Load LUTs for the season
+    luts_11_nh, luts_11_sh = all_lut['temp_11']['NH'], all_lut['temp_11']['SH']
+    luts_12_nh, luts_12_sh = all_lut['temp_12']['NH'], all_lut['temp_12']['SH']
+
+    lut_11_nh_sh = pd.concat([luts_11_nh[nh_seasn], luts_11_sh[sh_seasn]], ignore_index=True)
+    lut_12_nh_sh = pd.concat([luts_12_nh[nh_seasn], luts_12_sh[sh_seasn]], ignore_index=True)
+    
+    lat_windows = [tuple(map(int, lat.strip('()').split(','))) for lat in lut_11_nh_sh['latitude_bin'].unique()]
+
+    # Precompute LUT dictionaries for fast lookup
+    lut_11_nh_sh_dict, lut_12_nh_sh_dict = preprocess_lut(lut_11_nh_sh), preprocess_lut(lut_12_nh_sh)
+
+    for file_of_season in seasn_files:
+        process_file_vectorized(file_of_season, lat_windows, 
+                                lut_11_nh_sh, lut_11_nh_sh_dict, 
+                                lut_12_nh_sh, lut_12_nh_sh_dict, 
+                                limb_beam_positions, cor_dir)
+
+    end_time = time.time()
+    elapsed_seconds = end_time - start_time
+    elapsed_minutes = elapsed_seconds / 60
+    elapsed_hours = elapsed_seconds / 3600
+
+    print(f"Completed processing for {seas} season")
+    print('************************' * 100)
+    print(f"Elapsed time for applying correction: {elapsed_seconds:.2f} seconds "
+          f"({elapsed_minutes:.2f} minutes) ({elapsed_hours:.5f} hours)")
