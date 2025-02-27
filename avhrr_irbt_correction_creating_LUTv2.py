@@ -30,7 +30,6 @@ all_noaa_files = sorted([
 ])
 
 # organize file by seasons and hemisphere
-# Organize files by season and hemisphere
 seasonal_files = organize_files_by_season_in_hemisphere(all_noaa_files,'SH',1998)
 
 # # choose only 1 hemisphere

@@ -1,4 +1,14 @@
 #%%
+'''
+This script is used to apply the correction to the AVHRR data
+It uses a nested dictionary to store the lookup tables
+It uses the preprocess_lut function to preprocess the lookup tables
+It uses the organize_files_by_season_in_hemisphere function to organize the files by season and hemisphere
+It uses the multiprocessing module to parallelize the processing of the data
+It uses the process_season_vectorized function to process the data by season
+It uses the process_file_vectorized function to process the data by file
+'''
+#%%
 # import packages
 from util_functions import *
 from plot_functions import *
