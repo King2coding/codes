@@ -2306,7 +2306,7 @@ def get_valid_indices_and_data(lat_window, surfact_type, brightness_temp, lut_df
     valid_valid_indices = valid_indices[np.isin(valid_indices[:, 1], limb_beam_positions)]
 
     if valid_valid_indices.size == 0:
-        return None, None, None  # Skip processing if no valid indices found
+        return None, None, None, None  # Skip processing if no valid indices found
 
     # Extract valid indices
     i_indices, j_indices = valid_valid_indices[:, 0], valid_valid_indices[:, 1]
@@ -2322,6 +2322,19 @@ def process_file_vectorized(file_run, lat_windows,
                             lut_11_nh_sh, lut_11_nh_sh_dict, 
                             lut_12_nh_sh, lut_12_nh_sh_dict, 
                             limb_beam_positions, cor_dir):
+    """
+    Processes a single AVHRR file and applies IR TB correction.
+    Skips processing if the corrected file already exists.
+    """
+    # Define output file path
+    outfile = os.path.join(cor_dir, os.path.basename(file_run).replace('.nc', '_corrected.nc'))
+
+    # Skip processing if the output file already exists
+    if os.path.exists(outfile):
+        print(f"Skipping {file_run}, corrected file already exists: {outfile}")
+        return  # Exit function early
+
+    # Open dataset and extract required data
     dataset = xr.open_dataset(file_run)
     lats = dataset['latitude'].data
     cloud_probs = dataset['cloud_probability'].data
@@ -2353,7 +2366,7 @@ def process_file_vectorized(file_run, lat_windows,
             corrected_tb_12[i_indices_12,j_indices_12] = temp_12_tb * correction_12
 
 
-    outfile = os.path.join(cor_dir, os.path.basename(file_run).replace('.nc', '_corrected.nc'))
+    # outfile = os.path.join(cor_dir, os.path.basename(file_run).replace('.nc', '_corrected.nc'))
 
     save_corrected_11_12_dataset(dataset, corrected_tb_11, corrected_tb_12, outfile)
 
