@@ -2331,7 +2331,7 @@ def process_file_vectorized(file_run, lat_windows,
 
     # Skip processing if the output file already exists
     if os.path.exists(outfile):
-        print(f"Skipping {file_run}, corrected file already exists: {outfile}")
+        print(f"Skipping {os.path.basename(file_run)} (already processed)")
         return  # Exit function early
 
     # Open dataset and extract required data
@@ -2376,11 +2376,13 @@ def process_season_vectorized(seas, seasn_files, all_lut, limb_beam_positions, c
     Processes a single season's data in parallel.
     This function is meant to be run in parallel using multiprocessing.
     """
-    print(f"Starting processing for {seas} season")
+    total_files = len(seasn_files)
+    print(f"Starting processing for {seas} season with {len(total_files)} files")
     start_time = time.time()
 
     sh_seasn = seas
-    nh_seasn = {'Summer': 'Winter', 'Autumn': 'Spring', 'Winter': 'Summer', 'Spring': 'Autumn'}[seas]
+    nh_seasn = {'Summer': 'Winter', 'Autumn': 'Spring', 
+                'Winter': 'Summer', 'Spring': 'Autumn'}[seas]
 
     # Load LUTs for the season
     luts_11_nh, luts_11_sh = all_lut['temp_11']['NH'], all_lut['temp_11']['SH']
@@ -2394,11 +2396,19 @@ def process_season_vectorized(seas, seasn_files, all_lut, limb_beam_positions, c
     # Precompute LUT dictionaries for fast lookup
     lut_11_nh_sh_dict, lut_12_nh_sh_dict = preprocess_lut(lut_11_nh_sh), preprocess_lut(lut_12_nh_sh)
 
+    # Track progress
+    processed_files = 0   
+
     for file_of_season in seasn_files:
         process_file_vectorized(file_of_season, lat_windows, 
                                 lut_11_nh_sh, lut_11_nh_sh_dict, 
                                 lut_12_nh_sh, lut_12_nh_sh_dict, 
                                 limb_beam_positions, cor_dir)
+        
+        processed_files += 1        
+        if processed_files % 500 == 0:
+            progress = (processed_files / total_files) * 100
+            print(f"Progress: {progress} files processed in {seas}")
 
     end_time = time.time()
     elapsed_seconds = end_time - start_time
