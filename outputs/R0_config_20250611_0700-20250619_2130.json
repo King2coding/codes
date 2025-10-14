@@ -1,0 +1,23 @@
+{
+  "cadence_minutes": 15,
+  "snap_tolerance": "2min",
+  "regularize_grid": true,
+  "source_tz": "Africa/Accra",
+  "rsl_min_dbm": -130.0,
+  "rsl_max_dbm": -20.0,
+  "tl_min_db": 0.0,
+  "tl_max_db": 80.0,
+  "max_dyn_range_db": 12.0,
+  "rsl_outage_floor_dbm": -115.0,
+  "tl_outage_high_db": 75.0,
+  "outage_min_consec": 2,
+  "hampel_window": 7,
+  "hampel_nsigma": 6.0,
+  "plateau_run_len": 20,
+  "plateau_tol_db": 0.05,
+  "unpaired_spread_db": 6.0,
+  "unpaired_delta_db": 2.0,
+  "semantics": "auto",
+  "retry_oob_frac": 0.5,
+  "retry_valid_frac": 0.05
+}

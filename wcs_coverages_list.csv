@@ -1,0 +1,85 @@
+title,coverageId
+AVHRR IR10.8 6 orbits accumulated - Metop A,eps__m02_ir108
+AVHRR IR10.8 6 orbits accumulated - Metop B,eps__m01_ir108
+AVHRR IR10.8 6 orbits accumulated - Metop C,eps__m03_ir108
+AVHRR RGB Cloud Daily Accumulated - Metop A,eps__m02_rgb_124
+AVHRR RGB Cloud Daily Accumulated - Metop B,eps__m01_rgb_124
+AVHRR RGB Cloud Daily Accumulated - Metop C,eps__m03_rgb_124
+AVHRR RGB Natural Colour + Fog 6 orbits accumulated - Metop A,eps__m02_rgb_natural_fog
+AVHRR RGB Natural Colour + Fog 6 orbits accumulated - Metop B,eps__m01_rgb_natural_fog
+AVHRR RGB Natural Colour + Fog 6 orbits accumulated - Metop C,eps__m03_rgb_natural_fog
+Active Fire Monitoring (GRIB) - MSG - 0 degree,msg_fes__fire
+Active Fire Monitoring (GRIB) - MSG - Indian Ocean,msg_iodc__fire
+Airmass RGB - MSG - 0 degree,msg_fes__rgb_airmass
+Airmass RGB - MSG - Indian Ocean,msg_iodc__rgb_airmass
+Blended SEVIRI / LEO MW precipitation and morphologic information - MSG - 0 degree,msg_fes__h60b
+Cloud Mask - MSG - 0 degree,msg_fes__clm
+Cloud Mask - MSG - Indian Ocean,msg_iodc__clm
+Cloud Phase RGB - MTG-I - 0 degree,mtg_fd__rgb_cloudphase
+Cloud Top Height - MSG - 0 degree,msg_fes__cth
+Cloud Top Height - MSG - Indian Ocean,msg_iodc__cth
+Cloud Type RGB - MTG-I - 0 degree,mtg_fd__rgb_cloudtype
+Convection RGB - MSG - 0 degree,msg_fes__rgb_convection
+Convection RGB - MSG - Indian Ocean,msg_iodc__rgb_convection
+Day Microphysics RGB - MSG - 0 degree,msg_fes__rgb_microphysics
+Day Microphysics RGB - MSG - Indian Ocean,msg_iodc__rgb_microphysics
+Dust RGB - MSG - 0 degree,msg_fes__rgb_dust
+Dust RGB - MSG - Indian Ocean,msg_iodc__rgb_dust
+Dust RGB - MTG-I - 0 degree,mtg_fd__rgb_dust
+European HRV RGB,msg_fes__rgb_eview
+European HRV RGB - MSG - Indian Ocean,msg_iodc__rgb_eview
+FCI HRFI IR10.5 μm Image - MTG-I - 0 degree,mtg_fd__ir105_hrfi
+FCI HRFI VIS0.6 μm Image - MTG-I - 0 degree,mtg_fd__vis06_hrfi
+Fire Temperature RGB - MTG-I - 0 degree,mtg_fd__rgb_firetemperature
+Fog / Low Clouds RGB - MSG - 0 degree,msg_fes__rgb_fog
+Fog / Low Clouds RGB - MSG - Indian Ocean,msg_iodc__rgb_fog
+Fog / Low Clouds RGB - MTG-I - 0 degree,mtg_fd__rgb_fog
+GII K-Index – MSG – 0 degree,msg_fes__gii_kindex
+GII Lifted-Index – MSG – 0 degree,msg_fes__gii_liftedindex
+Geo Colour RGB - MTG-I - 0 degree,mtg_fd__rgb_geocolour
+Geo Ring Airmass RGB - Multimission,mumi__wideareacoverage_rgb_airmass
+Geo Ring Ash RGB - Multimission,mumi__wideareacoverage_rgb_ash
+Geo Ring Dust RGB - Multimission,mumi__wideareacoverage_rgb_dust
+Geo Ring Natural Colour RGB - Multimission,mumi__wideareacoverage_rgb_natural
+Geostationary Ring IR10.8 μm Image - Multimission,mumi__worldcloudmap_ir108
+Global Instability K-Index - MSG - Indian Ocean,msg_iodc__gii_kindex
+Global Instability Lifted-Index – MSG – Indian Ocean,msg_iodc__gii_liftedindex
+Global L3C AVHRR Sea Surface Temperature (GHRSST) - Metop,eps__osisaf_avhrr_l3_sst
+High Rate SEVIRI IR10.8 μm Image - MSG - 0 degree,msg_fes__ir108
+High Rate SEVIRI IR10.8 μm Image - MSG - Indian Ocean,msg_iodc__ir108
+High Rate SEVIRI IR3.9 μm Image - MSG - 0 degree,msg_fes__ir039
+High Rate SEVIRI IR3.9 μm Image - MSG - Indian Ocean,msg_iodc__ir039
+High Rate SEVIRI VIS0.6 μm Image - MSG - 0 degree,msg_fes__vis006
+High Rate SEVIRI VIS0.6 μm Image - MSG - Indian Ocean,msg_iodc__vis006
+High Rate SEVIRI WV6.2 μm Image - MSG - 0 degree,msg_fes__wv062
+High Rate SEVIRI WV6.2 μm Image - MSG - Indian Ocean,msg_iodc__wv062
+LI Accumulated Flash Area - MTG-I - 0 degree,mtg_fd__li_afa
+Natural Colour Enhanced RGB - MSG - 0 degree,msg_fes__rgb_naturalenhncd
+Natural Colour Enhanced RGB - MSG - Indian Ocean,msg_iodc__rgb_naturalenhncd
+Natural Colour RGB - MSG - 0 degree,msg_fes__rgb_natural
+Natural Colour RGB - MSG - Indian Ocean,msg_iodc__rgb_natural
+NaturalEarth Background,backgrounds__ne_background
+NaturalEarth Background Gray,backgrounds__ne_gray
+OLCI Level 1B RGB - Sentinel-3A,copernicus__sentinel3a_olci_l1_rgb_fullres
+OLCI Level 1B RGB - Sentinel-3B,copernicus__sentinel3b_olci_l1_rgb_fullres
+OLCI Level 1B RGB Daily Accumulated - Sentinel-3,copernicus__daily_sentinel3ab_olci_l1_rgb_fulres
+OLCI Level 2 CHL Concentration - Sentinel-3A,copernicus__sentinel3a_olci_l2_chl_fullres
+OLCI Level 2 CHL Concentration - Sentinel-3B,copernicus__sentinel3b_olci_l2_chl_fullres
+OLCI Level 2 CHL Concentration Daily Accumulated - Sentinel-3,copernicus__daily_sentinel3ab_olci_l2_chl_fullres
+OSI SAF Blended Global Sea Ice Concentration Climate and Interim Climate Data Records for Northern Hemisphere - DMSP,mumi__osi_sic_cdr_v3_nh
+OSI SAF Blended Global Sea Ice Concentration Climate and Interim Climate Data Records for Southern Hemisphere - DMSP,mumi__osi_sic_cdr_v3_sh
+Precipitation rate at ground by GEO/IR supported by LEO/MW - MSG - Indian Ocean,msg_iodc__h63
+Rapid Scan High Rate SEVIRI IR 3.9 - MSG,msg_rss__ir039_nrt
+Rapid Scan High Rate SEVIRI RGB Day Microphysics - MSG,msg_rss__rgb_microphysics_nrt
+Rapid Scan High Rate SEVIRI RGB Natural Colour - MSG,msg_rss__rgb_natural_nrt
+Rapid Scan High Rate SEVIRI RGB Natural Colour Enhncd. - MSG,msg_rss__rgb_naturalenhncd_nrt
+SLSTR Level 2 SST Daily Accumulated - Sentinel-3,copernicus__daily_sentinel3ab_slstr_l2p_sst_fullres
+SLSTR Level 2 Sea Surface Temperature (SST) - Sentinel-3A,copernicus__sentinel3a_slstr_l2p_sst_fullres
+SLSTR Level 2 Sea Surface Temperature (SST) - Sentinel-3B,copernicus__sentinel3b_slstr_l2p_sst_fullres
+Snow RGB - MSG - Indian Ocean,msg_iodc__rgb_snow
+Tropical Airmass RGB - MSG - 0 degree,msg_fes__rgb_tropicalairmass
+Tropical Airmass RGB - MSG - Indian Ocean,msg_iodc__rgb_tropicalairmass
+True Colour RGB - MTG-I - 0 degree,mtg_fd__rgb_truecolour
+Volcanic Ash RGB - MSG - 0 degree,msg_fes__rgb_ash
+Volcanic Ash RGB - MSG - Indian Ocean,msg_iodc__rgb_ash
+rgb_snow,msg_fes__rgb_snow
