@@ -447,7 +447,7 @@ for t in times_to_try[:5]:
 import importlib
 import pipeline_modes as pm
 importlib.reload(pm)
-from plot_helpers import plot_helpers as ph
+# from plot_helpers import plot_helpers as ph
 # 1) strict 15-min series with Rainlink-style RSL
 ts_15 = pm.build_15min_timeseries(df_clean)
 
@@ -495,40 +495,40 @@ import importlib, step6_grid_ok_pcm as s6pcm
 importlib.reload(s6pcm)
 
 # 1) run gridding (kill drizzle + enable OK)
-# Res, diag = s6pcm.grid_rain_15min(
-#     df_s5=df_s5[["ID","R_mm_per_h"]],
-#     df_meta_for_xy=meta_xy_grid,          # from your ts_15
-#     grid_res_deg=0.03, domain_pad_deg=0.2,
-#     drizzle_to_zero=0.10,                 # kills the faint 0–0.2 mm/h carpet
-#     use_ok=True, min_pts_ok=12, nlags=10, ok_range_km=35.0,
-#     idw_power=1.7, idw_nnear=15, idw_maxdist_km=35.0,
-#     max_dist_km_mask=40.0, smooth_kernel_px=2,
-#     n_jobs=20,
-# )
-# print(diag["counts"])
-# ok_times = pd.to_datetime(diag["ok_times"])
-# print("OK slices:", len(ok_times), "e.g.", ok_times[:5])
+Res, diag = s6pcm.grid_rain_15min(
+    df_s5=df_s5[["ID","R_mm_per_h"]],
+    df_meta_for_xy=meta_xy_grid,          # from your ts_15
+    grid_res_deg=0.03, domain_pad_deg=0.2,
+    drizzle_to_zero=0.10,                 # kills the faint 0–0.2 mm/h carpet
+    use_ok=True, min_pts_ok=12, nlags=10, ok_range_km=35.0,
+    idw_power=1.7, idw_nnear=15, idw_maxdist_km=35.0,
+    max_dist_km_mask=40.0, smooth_kernel_px=2,
+    n_jobs=20,
+)
+print(diag["counts"])
+ok_times = pd.to_datetime(diag["ok_times"])
+print("OK slices:", len(ok_times), "e.g.", ok_times[:5])
 
-# # --- 2) Plot an OK slice -----------------------------------------------------
-# ok_times = [pd.Timestamp(t) for t in diag.get("ok_times", [])]
-# t_plot = ok_times[0] if ok_times else pd.Timestamp(diag["times_used"][0])
+# --- 2) Plot an OK slice -----------------------------------------------------
+ok_times = [pd.Timestamp(t) for t in diag.get("ok_times", [])]
+t_plot = ok_times[0] if ok_times else pd.Timestamp(diag["times_used"][0])
 
-# # compute max rain for every OK time and pick the peak
-# mx = []
-# for t in ok_times:
-#     a = Res.sel(time=np.datetime64(t), method="nearest").values
-#     mx.append(np.nanmax(a))
-# t_peak = ok_times[int(np.nanargmax(mx))]
+# compute max rain for every OK time and pick the peak
+mx = []
+for t in ok_times:
+    a = Res.sel(time=np.datetime64(t), method="nearest").values
+    mx.append(np.nanmax(a))
+t_peak = ok_times[int(np.nanargmax(mx))]
 
-# t_plot = t_peak
+t_plot = t_peak
 
-# plot_slice_cartopy_with_links(
-#     Res, meta_xy_grid.rename(columns={"ID":"link_id"}),  # function expects link columns as in your meta
-#     t_plot,
-#     vmin=0.0, vmax=15.0, nbins=16,
-#     extent=(-4, 1.5, 4.5, 11.5), cmap_name="turbo"
-# )
-
+plot_slice_cartopy_with_links(
+    Res, meta_xy_grid.rename(columns={"ID":"link_id"}),  # function expects link columns as in your meta
+    t_plot,
+    vmin=0.0, vmax=15.0, nbins=16,
+    extent=(-4, 1.5, 4.5, 11.5), cmap_name="turbo"
+)
+#%%
 
 import numpy as np, pandas as pd, xarray as xr
 from sklearn.neighbors import BallTree
@@ -675,7 +675,7 @@ plot_slice_cartopy_with_links(
     extent=(-3.25, 1.2, 4.8, 11.15),
     cmap_name="Blues",
     # optional niceties:
-    cbar_side="right", cbar_size="4%", cbar_pad=0.05, tick_every=2
+    cbar_side="right", cbar_size="4%", cbar_pad=0.05
 )
 #%%  Step 2 Baseline Estimation
 import importlib, step2_baseline_dry48

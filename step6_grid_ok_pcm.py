@@ -188,11 +188,9 @@ def grid_rain_15min(
     df_meta_for_xy: columns: ID, XStart, YStart, XEnd, YEnd (per-link geometry)
     """
     df_s5 = df_s5.copy()
-    # drizzle → 0.0 (but keep true zeros)
+    df_s5["R_mm_per_h"] = pd.to_numeric(df_s5["R_mm_per_h"], errors="coerce").fillna(0.0)
     df_s5["R_mm_per_h"] = df_s5["R_mm_per_h"].where(
-        (pd.to_numeric(df_s5["R_mm_per_h"], errors="coerce") >= float(drizzle_to_zero)) |
-        (pd.to_numeric(df_s5["R_mm_per_h"], errors="coerce") == 0.0),
-        0.0
+        (df_s5["R_mm_per_h"] >= float(drizzle_to_zero)) | (df_s5["R_mm_per_h"] == 0.0), 0.0
     )
 
     # index hygiene

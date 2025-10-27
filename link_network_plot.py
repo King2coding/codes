@@ -439,3 +439,183 @@ im = Tb.plot(ax=ax, transform=proj, cmap="inferno")
 plt.show()
 
 ds.close()
+
+#%%
+PATH = "/home/kkumah/Projects/cml-stuff/satellite_data/msg/run_20251014_014430/20250619_153010/HRSEVIRI_20250619T153010Z_20250619T154243Z_epct_c670a0b7_FC_dup1760406351_CROP.nc"
+ds = xr.open_dataset(PATH)
+
+c1 = 1.191044e-5   # mW/(m²·sr·cm⁻⁴) - First radiation constant
+c2 = 1.4387752     # K·cm - Second radiation constant
+
+bt = (c2 * 931.122) / np.log(1 + (c1 * 931.122**3) / ds['channel_9'])
+bt.attrs.update(units="K", long_name=f"Brightness Temperature {BAND}")
+
+BAND = "IR108"  # or "IR120"
+info = BANDS[BAND]
+term = c1 * (info["nu_c"]**3) / ds['channel_9'] + 1.0
+bt_ = ((c2 * info["nu_c"]) / np.log(term)- info["beta"]) / info["alpha"]
+bt_.attrs.update(units="K", long_name=f"Brightness Temperature {BAND}")
+
+
+
+
+proj = ccrs.Geostationary(satellite_height=35785831.0, central_longitude=0.0, sweep_axis="y")
+fig = plt.figure(figsize=(6,6))
+ax = plt.axes(projection=proj)
+ax.coastlines(linewidth=0.8)
+ax.add_feature(cfeature.BORDERS, linewidth=0.6)
+im = bt.plot(ax=ax, transform=proj, cmap="jet")
+ax.set_title(bt.long_name + " [K] from bt")
+plt.show()
+
+plt.scatter(bt.values,bt_.values)
+plt.xlabel("bt values")
+plt.ylabel("bt_ values")
+plt.title("Scatter plot of bt vs bt_")
+plt.show()
+
+
+#%%
+import xarray as xr
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import cartopy.crs as ccrs
+import cartopy.feature as cfeature
+import matplotlib.ticker as mticker
+C1, C2 = 1.19104e-5, 1.43877
+BANDS = {
+    "IR108": {"var": "channel_9",  "attr": "ch09_cal", "nu_c": 931.122, "alpha": 0.9983, "beta": 0.6256, "lambda_um": 10.8},
+    "IR120": {"var": "channel_10", "attr": "ch10_cal", "nu_c": 839.113, "alpha": 0.9988, "beta": 0.4002, "lambda_um": 12.0},
+}
+
+# BT_COEFF = {
+#     "WV062": {"nu": 1596.080, "alpha": 0.9959, "beta": 2.0780},  # channel_5
+#     "IR108": {"nu":  931.122, "alpha": 0.9983, "beta": 0.6256},  # channel_9
+#     "IR120": {"nu":  839.113, "alpha": 0.9988, "beta": 0.4002},  # channel_10
+# }
+
+ds_path = r'/home/kkumah/Projects/cml-stuff/satellite_data/msg/run_20251025_222108/20250619_161511/HRSEVIRI_20250619T161511Z_20250619T162743Z_epct_cbaff216_FC_dup1761430899_BT.nc'
+
+ds = xr.open_dataset(ds_path)
+
+ds_ir108 = ds['BT_IR108']
+ds_ir120 = ds['BT_IR120']
+proj = ccrs.Geostationary(satellite_height=35785831.0, central_longitude=0.0, sweep_axis="y")
+fig = plt.figure(figsize=(6,6))
+ax = plt.axes(projection=proj)
+ax.coastlines(linewidth=0.8)
+ax.add_feature(cfeature.BORDERS, linewidth=0.6)
+im = ds_ir108.plot(ax=ax, transform=proj, cmap="jet")
+ax.set_title(ds_ir108.long_name + " [K] from bt")
+# --- Projection (assuming same as your dataset) ---
+# --- Add gridlines & labeled ticks ---
+gl = ax.gridlines(draw_labels=True, linewidth=1.5, color='gray', alpha=0.6, linestyle='--')
+gl.top_labels = False
+gl.right_labels = False
+gl.xlabel_style = {'size': 9}
+gl.ylabel_style = {'size': 9}
+proj = ccrs.PlateCarree()
+# Optional: specify tick spacing like your rainfall maps
+ax.set_extent([-4, 1.5, 4.5, 11.5], crs=proj)
+gl.xlocator = mticker.FixedLocator(np.arange(-4, 3, 1))
+gl.ylocator = mticker.FixedLocator(np.arange(5, 13, 1))
+
+plt.show()
+
+BAND = "IR108"  # or "IR120"
+info = BANDS[BAND]
+ds_chan_108 = ds['channel_9']
+term = C1 * (info["nu_c"]**3) / ds['channel_9'] + 1.0
+bt_108 = ((C2 * info["nu_c"]) / np.log(term)- info["beta"]) / info["alpha"]
+
+
+proj = ccrs.Geostationary(satellite_height=35785831.0, central_longitude=0.0, sweep_axis="y")
+fig = plt.figure(figsize=(6,6))
+ax = plt.axes(projection=proj)
+ax.coastlines(linewidth=0.8)
+ax.add_feature(cfeature.BORDERS, linewidth=0.6)
+im = bt_108.plot(ax=ax, transform=proj, cmap="jet")
+ax.set_title("BT_IR108 [K]")
+plt.show()
+
+
+BAND = "IR120"  # or "IR120"
+info = BANDS[BAND]
+ds_chan_120 = ds['channel_10']
+term = C1 * (info["nu_c"]**3) / ds['channel_10'] + 1.0
+bt_120 = ((C2 * info["nu_c"]) / np.log(term)- info["beta"]) / info["alpha"]
+
+proj = ccrs.Geostationary(satellite_height=35785831.0, central_longitude=0.0, sweep_axis="y")
+fig = plt.figure(figsize=(6,6))
+ax = plt.axes(projection=proj)
+ax.coastlines(linewidth=0.8)
+ax.add_feature(cfeature.BORDERS, linewidth=0.6)
+im = bt_120.plot(ax=ax, transform=proj, cmap="jet")
+ax.set_title("BT_IR120 [K]")
+plt.show()
+
+
+#%%
+import matplotlib.pyplot as plt
+import xarray as xr
+import numpy as np
+import matplotlib.colors as mcolors
+
+clm_path = r'/home/kkumah/Projects/cml-stuff/satellite_data/msg_clm/run_20251025_221705/20250619_161500/MSGCLMK_20250619T161500Z_20250619T161500Z_epct_b0b17714_C_dup1761430652_CLM.nc'
+ds_clm = xr.open_dataset(clm_path)
+cmask = ds_clm["cloud_mask"].squeeze()
+
+import numpy as np
+import matplotlib.pyplot as plt
+import cartopy.crs as ccrs
+import cartopy.feature as cfeature
+import matplotlib.colors as mcolors
+
+# --- Cloud mask label mapping ---
+label_map = {0: "Clear water", 1: "Clear land", 2: "Cloud", 3: "No data"}
+cmap = mcolors.ListedColormap(["#6EC5FF", "#E6D96A", "#FFFFFF", "#A0A0A0"])
+norm = mcolors.BoundaryNorm([0,1,2,3,4], cmap.N)
+
+# --- CRS definitions ---
+data_crs = ccrs.Geostationary(satellite_height=35785831.0,
+                              central_longitude=0.0, sweep_axis="y")
+map_crs = ccrs.PlateCarree()
+
+# --- Mesh grid for plotting ---
+X, Y = np.meshgrid(cmask["x"].values, cmask["y"].values)
+
+# --- Plot setup ---
+fig = plt.figure(figsize=(6, 6))
+ax = plt.axes(projection=map_crs)
+ax.set_extent([-4, 1.5, 4.5, 11.5], crs=map_crs)
+
+# --- Background and borders ---
+ax.coastlines(linewidth=0.8)
+ax.add_feature(cfeature.BORDERS.with_scale("50m"), linewidth=0.6)
+ax.add_feature(cfeature.LAKES.with_scale("50m"), facecolor='none', edgecolor='gray', linewidth=0.5)
+ax.add_feature(cfeature.RIVERS.with_scale("50m"), edgecolor='lightgray', linewidth=0.4)
+
+# --- Cloud mask layer ---
+im = ax.pcolormesh(X, Y, cmask.values, transform=data_crs,
+                   cmap=cmap, norm=norm, shading="nearest")
+
+# --- Colorbar ---
+cbar = plt.colorbar(im, ticks=np.arange(0.5, 4.5))
+cbar.ax.set_yticklabels([label_map[i] for i in range(4)])
+cbar.set_label("Cloud Mask Classes")
+
+# --- Gridlines and ticks (as in rainfall map) ---
+gl = ax.gridlines(draw_labels=True, linewidth=0.5, color='gray', alpha=0.6, linestyle='--')
+gl.top_labels = False
+gl.right_labels = False
+gl.xlabel_style = {'size': 9}
+gl.ylabel_style = {'size': 9}
+gl.xlocator = plt.FixedLocator(np.arange(-4, 3, 1))
+gl.ylocator = plt.FixedLocator(np.arange(5, 13, 1))
+
+# --- Title ---
+plt.title("MSG Cloud Mask Classification\n" + str(cmask.attrs.get("time", "")), fontsize=12)
+
+plt.tight_layout()
+plt.show()

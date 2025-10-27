@@ -44,7 +44,7 @@ END   = "2025-06-19T18:00:00Z"
 BBOX: Tuple[float, float, float, float] = (-4.0, 1.5, 4.5, 11.5)
 
 # Tailor chain (you already created/validated it)
-TAILOR_CHAIN = "ghana_config"
+TAILOR_CHAIN = "ghana_config" # ghana_clm_config
 
 # Throttle how many Tailor jobs run in parallel
 MAX_INFLIGHT = 2

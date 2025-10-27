@@ -9,16 +9,16 @@ from pycomlink.processing.k_R_relation import calc_R_from_A
 
 
 # ---------- A) RAINLINK-strict utilities ----------
-def _baseline_q90_past_only(rsl_series: pd.Series, win="24H", q=0.9):
-    """
-    Past-only rolling upper-quantile baseline (no future leakage).
-    Requires a DatetimeIndex (can be tz-aware).
-    """
-    base = (
-        rsl_series.rolling(window=win, min_periods=2, closed="left").quantile(q)
-    )
-    # Fill very-early gaps a bit so A_obs isn't NaN at start
-    return base.fillna(method="backfill", limit=4)
+def _baseline_q90_past_only(
+    rsl_series: pd.Series,
+    win="24H", q=0.9,
+    min_past_bins:int = 4,     # need at least this many past 15-min bins
+    ffill_limit_bins:int = 32, # carry baseline forward ≤8h across gaps
+    bfill_limit_bins:int = 4   # small early backfill
+):
+    base = rsl_series.rolling(window=win, min_periods=min_past_bins, closed="left").quantile(q)
+    return base.ffill(limit=ffill_limit_bins).bfill(limit=bfill_limit_bins)
+
 
 
 def build_15min_timeseries(df_clean: pd.DataFrame) -> pd.DataFrame:
@@ -99,20 +99,40 @@ def build_15min_timeseries(df_clean: pd.DataFrame) -> pd.DataFrame:
     return ts
 
 
-def rainlink_strict_Aobs(ts_15: pd.DataFrame, wet_thr_db: float = 0.5) -> pd.DataFrame:
+def rainlink_strict_Aobs(ts_15: pd.DataFrame, wet_thr_db: float = 0.5,
+                         min_past_bins:int = 4, ffill_limit_bins:int = 32,
+                         two_pass: bool = True) -> pd.DataFrame:
     """
-    Per-link past-only Q90 baseline -> A_obs (dB) and simple wet mask (wet_rl).
+    Past-only Q90 baseline -> A_obs and wet mask.
+    If two_pass=True: recompute baseline on 'dry-only' (mask out first-pass wet).
     """
     out = []
     for lid, g in ts_15.groupby("link_id", sort=False):
         g = g.sort_values("time").copy()
         rsl = pd.Series(g["RSL_dBm"].astype(float).values,
                         index=pd.DatetimeIndex(g["time"]))
-        base = _baseline_q90_past_only(rsl, win="24H", q=0.9)
+
+        # pass 1
+        base1 = _baseline_q90_past_only(rsl, win="24H", q=0.9,
+                                        min_past_bins=min_past_bins,
+                                        ffill_limit_bins=ffill_limit_bins)
+        A1 = np.maximum(0.0, base1.values - rsl.values)
+        wet1 = (A1 > wet_thr_db) & np.isfinite(A1)
+
+        if two_pass:
+            # mask wet, recompute baseline only from 'dry' samples
+            rsl_dry = rsl.mask(wet1)
+            base2 = _baseline_q90_past_only(rsl_dry, win="24H", q=0.9,
+                                            min_past_bins=min_past_bins,
+                                            ffill_limit_bins=ffill_limit_bins)
+            base = base2.fillna(base1)  # keep pass-1 where pass-2 lacks support
+        else:
+            base = base1
+
         Aobs = np.maximum(0.0, base.values - rsl.values)
         g["baseline_rsl"] = base.values
         g["A_obs_dB"]     = Aobs
-        g["wet_rl"]       = Aobs > wet_thr_db
+        g["wet_rl"]       = (Aobs > wet_thr_db) & np.isfinite(Aobs)
         out.append(g)
     return pd.concat(out, ignore_index=True)
 
@@ -264,9 +284,11 @@ def apply_wet_gate_and_drizzle(df_rate: pd.DataFrame,
                                wet_col: str = "wet_rl") -> pd.DataFrame:
     z = dfA[["link_id","time",wet_col]].rename(columns={wet_col:"wet"})
     out = df_rate.merge(z, on=["link_id","time"], how="left")
-    out["R_mm_per_h"] = np.where(
-        (out["wet"] != True) | (out["R_mm_per_h"] < drizzle),
-        0.0,
-        out["R_mm_per_h"]
-    )
+
+    # treat NaN rain as 0 unless explicitly wet AND finite
+    R = pd.to_numeric(out["R_mm_per_h"], errors="coerce")
+    is_wet = out["wet"] == True
+    R_safe = R.where(is_wet & R.notna(), 0.0)
+
+    out["R_mm_per_h"] = np.where(R_safe < float(drizzle), 0.0, R_safe)
     return out.drop(columns=["wet"])
