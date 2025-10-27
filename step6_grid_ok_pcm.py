@@ -168,7 +168,7 @@ def grid_rain_15min(
     nlags: int = 10,
     ok_range_km: float = 25.0,
     ok_nugget_frac: float = 0.05,
-    ok_max_train: int | None = None,       # NEW: cap wet points used in OK (after dedup)
+    ok_max_train: int | None = None,
     idw_power: float = 2.0,
     idw_nnear: int = 15,
     idw_maxdist_km: float = 25.0,
@@ -176,22 +176,31 @@ def grid_rain_15min(
     smooth_kernel_px: int = 3,
     n_jobs: int = 1,
     times_sel=None,
-    # NEW parallel controls
-    parallel_backend_name: str = "processes",   # "processes" (loky) or "threads"
-    kdtree_workers: int | None = 1,             # keep KDTree single-threaded to avoid oversubscription
-    # NEW dedup bin size
-    collocate_bin_km: float = 2.0,              # median merge links closer than ~2 km in km-projected plane
-    use_pathlength_weights: bool = True,        # weight IDW by sqrt(PathLength)
+    parallel_backend_name: str = "processes",
+    kdtree_workers: int | None = 1,
+    collocate_bin_km: float = 2.0,
+    use_pathlength_weights: bool = True,
+    # NEW fill controls (defaults = NaN)
+    outside_support_fill=np.nan,           # value outside wet-footprint support
+    interior_no_neighbor_fill=np.nan,      # value for interior “holes” (no neighbors within radius)
+    insufficient_training_fill=np.nan,     # whole grid when no wet pts or cannot train
 ):
     """
     df_s5: index=DatetimeIndex (naive UTC), columns: ["ID","R_mm_per_h", ...]
-    df_meta_for_xy: columns: ID, XStart, YStart, XEnd, YEnd (per-link geometry)
+    df_meta_for_xy: columns: ID, XStart, YStart, XEnd, YEnd
+
+    NOTE: We no longer force NaNs to 0.0. Small finite drizzle values are floored to 0.0,
+    but unknowns remain NaN unless you override the *_fill parameters.
     """
     df_s5 = df_s5.copy()
-    df_s5["R_mm_per_h"] = pd.to_numeric(df_s5["R_mm_per_h"], errors="coerce").fillna(0.0)
-    df_s5["R_mm_per_h"] = df_s5["R_mm_per_h"].where(
-        (df_s5["R_mm_per_h"] >= float(drizzle_to_zero)) | (df_s5["R_mm_per_h"] == 0.0), 0.0
-    )
+    df_s5["R_mm_per_h"] = pd.to_numeric(df_s5["R_mm_per_h"], errors="coerce")
+
+    # Drizzle → 0.0 (only where finite and positive)
+    if drizzle_to_zero is not None:
+        v = df_s5["R_mm_per_h"].to_numpy(float)
+        mask = np.isfinite(v) & (v > 0.0) & (v < float(drizzle_to_zero))
+        v[mask] = 0.0
+        df_s5["R_mm_per_h"] = v
 
     # index hygiene
     idx = df_s5.index
@@ -240,11 +249,9 @@ def grid_rain_15min(
     LON, LAT = np.meshgrid(lon, lat)
     Xkm, Ykm = _lonlat_to_km(LON, LAT, lon0, lat0)
 
-    ok_times = []
     methods_used = []
     n_wet_list  = []
 
-    # per-time worker
     def _do_time(t):
         g = df_s5.loc[df_s5.index == t, ["ID","R_mm_per_h"]].copy()
         g = g.merge(m[["ID","lon","lat","PathLength"]] if "PathLength" in m.columns else m[["ID","lon","lat"]],
@@ -256,6 +263,11 @@ def grid_rain_15min(
 
         x = g["lon"].to_numpy(float); y = g["lat"].to_numpy(float); z = g["R_mm_per_h"].to_numpy(float)
         xkm, ykm = _lonlat_to_km(x, y, lon0, lat0)
+
+        # If no usable points at all → whole grid = insufficient_training_fill
+        if len(xkm) == 0:
+            Z = np.full_like(LON, insufficient_training_fill, float)
+            return Z, "no_info", 0
 
         # deduplicate near-collocated links (median)
         if len(xkm):
@@ -269,22 +281,13 @@ def grid_rain_15min(
         else:
             xkm_d = xkm; ykm_d = ykm; z_d = z
 
-        # optional training cap for OK
-        if ok_max_train is not None and len(z_d) > int(ok_max_train):
-            # uniform subsample by a coarser bin to keep spatial spread
-            factor = max(1, int(np.sqrt(len(z_d)/float(ok_max_train))))
-            bx = np.round(xkm_d/(collocate_bin_km*factor)).astype(int)
-            by = np.round(ykm_d/(collocate_bin_km*factor)).astype(int)
-            bins = list(zip(bx, by))
-            # take medians per coarse bin
-            tmp = pd.DataFrame({"x": xkm_d, "y": ykm_d, "z": z_d, "_b": bins})
-            tmp = tmp.groupby("_b", as_index=False).median(numeric_only=True)
-            xkm_d, ykm_d, z_d = tmp["x"].to_numpy(), tmp["y"].to_numpy(), tmp["z"].to_numpy()
-
-        n_wet = int(np.isfinite(z_d).sum() - (z_d <= 0.0).sum())
-
-        # wet-only footprint & cleaning (based on strictly positive values)
+        # wet-only footprint (strictly positive)
         wet_pts = np.isfinite(z) & (z > 0.0)
+        if wet_pts.sum() < 1:
+            # no wet info → whole grid = insufficient_training_fill
+            Z = np.full_like(LON, insufficient_training_fill, float)
+            return Z, "no_wet", 0
+
         x_w, y_w = x[wet_pts], y[wet_pts]
         covmask_wet = _nearest_distance_mask(
             lon, lat, x_w, y_w, max_dist_km=max_dist_km_mask, workers=kdtree_workers
@@ -296,8 +299,9 @@ def grid_rain_15min(
         if use_pathlength_weights and "PathLength" in g.columns:
             w_pts = np.sqrt(np.clip(pd.to_numeric(g["PathLength"], errors="coerce").to_numpy(float), 1.0, None))
 
-        Z = np.full_like(LON, np.nan, dtype=float)
         used = "idw_knn"
+        Z = np.full_like(LON, np.nan, dtype=float)
+        n_wet = int((z_d > 0.0).sum())
 
         if use_ok and _PYKRIGE_AVAILABLE and (n_wet >= int(min_pts_ok)):
             try:
@@ -321,13 +325,25 @@ def grid_rain_15min(
             )
             used = "idw_knn"
 
-        # apply wet support, smooth, and fill unsupported interior with 0
-        Z[~covmask_wet] = np.nan
+        # Outside support → fill (default NaN)
+        if np.isnan(outside_support_fill):
+            Z[~covmask_wet] = np.nan
+        else:
+            Z[~covmask_wet] = float(outside_support_fill)
+
+        # Smooth ONLY where we have values (no bleed)
         valid_mask = np.isfinite(Z)
         Z = _smooth_in_mask(Z, valid_mask, kernel_px=smooth_kernel_px)
-        Z = np.where(covmask_wet & ~np.isfinite(Z), 0.0, Z)
 
-        return Z, used, int(n_wet)
+        # Interior “holes” (inside support but still NaN) → fill (default NaN)
+        inside_holes = covmask_wet & ~np.isfinite(Z)
+        if np.isnan(interior_no_neighbor_fill):
+            # leave as NaN
+            pass
+        else:
+            Z[inside_holes] = float(interior_no_neighbor_fill)
+
+        return Z, used, n_wet
 
     backend = "loky" if parallel_backend_name == "processes" else "threading"
     with parallel_backend(backend):
@@ -372,6 +388,9 @@ def grid_rain_15min(
             n_jobs=n_jobs, parallel_backend_name=parallel_backend_name,
             kdtree_workers=kdtree_workers, collocate_bin_km=collocate_bin_km,
             use_pathlength_weights=use_pathlength_weights,
+            outside_support_fill=outside_support_fill,
+            interior_no_neighbor_fill=interior_no_neighbor_fill,
+            insufficient_training_fill=insufficient_training_fill,
         ),
         times_used=[str(t) for t in times[:10]],
     )
@@ -428,13 +447,23 @@ def grid_rain_15min_rainlink_ok(
     ok_model="exponential", ok_range_km=25.0, ok_nugget_frac=0.4,
     min_pts_ok=12,                            # need at least this many (wet+dry0) to run OK
     support_k=2, support_radius_km=25.0,     # mask requires ≥k wet links within radius
-    drizzle_to_zero=0.10,                     # final floor to 0
+    drizzle_to_zero=0.10,                     # floor tiny positives to 0.0 (doesn't touch NaNs)
     times_sel=None,
     # NEW:
     n_jobs: int = 1,
     parallel_backend_name: str = "processes",
+    # NEW controls for “no information”
+    outside_support_fill=np.nan,             # what to put OUTSIDE strict wet support (np.nan or 0.0)
+    insufficient_training_fill=np.nan,       # what to put when we cannot train/interpolate at all
 ):
-    """RAINLINK-like: OK trained on wet values + dry zeros; apply strict wet support mask."""
+    """
+    RAINLINK-like: OK trained on wet values + dry zeros; apply strict wet support mask.
+
+    outside_support_fill:
+        Value for cells outside the wet-link support mask (default NaN).
+    insufficient_training_fill:
+        Value for the entire grid when there were no usable points or too few to train (default NaN).
+    """
     if not _PYKRIGE_AVAILABLE:
         raise RuntimeError("PyKrige not available for RainLINK-style gridding.")
 
@@ -451,15 +480,16 @@ def grid_rain_15min_rainlink_ok(
     id2xy = mid.set_index("ID")[["lon_mid","lat_mid"]]
 
     # diagnostics
-    diag = {"counts": {"ok": 0, "fallback_zero": 0}, "wet_counts": [], "train_counts": []}
+    diag = {"counts": {"ok": 0, "fallback": 0}, "wet_counts": [], "train_counts": []}
 
     def _do_one(it, t):
         # slice points and attach coords
         try:
             pts = (df_s5.loc[t].merge(id2xy, on="ID", how="inner"))
         except KeyError:
-            # no rows at this timestamp
-            return it, None, 0, 0, True
+            # no rows at this timestamp → whole grid is "no info"
+            Z = np.full_like(LON, insufficient_training_fill, float)
+            return it, Z, 0, 0, False
 
         vals = pd.to_numeric(pts["R_mm_per_h"], errors="coerce").values
         lon  = pd.to_numeric(pts["lon_mid"], errors="coerce").values
@@ -467,7 +497,8 @@ def grid_rain_15min_rainlink_ok(
 
         good = np.isfinite(vals) & np.isfinite(lon) & np.isfinite(lat)
         if not good.any():
-            return it, np.zeros_like(LON, float), 0, 0, False  # fallback zero
+            Z = np.full_like(LON, insufficient_training_fill, float)
+            return it, Z, 0, 0, False
 
         vals, lon, lat = vals[good], lon[good], lat[good]
 
@@ -482,7 +513,8 @@ def grid_rain_15min_rainlink_ok(
         val_tr = np.concatenate([vals[wet], np.zeros(np.count_nonzero(dry), float)])
 
         if len(val_tr) < max(3, int(min_pts_ok)):
-            return it, np.zeros_like(LON, float), int(wet.sum()), int(len(val_tr)), False
+            Z = np.full_like(LON, insufficient_training_fill, float)
+            return it, Z, int(wet.sum()), int(len(val_tr)), False
 
         # OK on geographic coords
         vparam = _estimate_variogram_params(val_tr, range_km=ok_range_km, nugget_frac=ok_nugget_frac)
@@ -498,21 +530,28 @@ def grid_rain_15min_rainlink_ok(
             Z = np.asarray(Z, float)
 
             # strict support mask based on WET links only
-            if _SKLEARN_AVAILABLE:
+            if _SKLEARN_AVAILABLE and len(lon_wet) >= max(1, int(support_k)):
                 mask = _support_mask_wet_haversine(LON, LAT, lon_wet, lat_wet,
                                                    k=int(support_k), radius_km=float(support_radius_km))
             else:
                 # fallback: nearest-distance footprint from wet points in degrees (~approx km)
-                mask = _nearest_distance_mask(xv, yv, lon_wet, lat_wet, max_dist_km=support_radius_km, workers=1)
+                mask = _nearest_distance_mask(xv, yv, lon_wet, lat_wet,
+                                              max_dist_km=support_radius_km, workers=1)
 
-            Z = np.where(mask, Z, 0.0)          # outside support → 0 (or np.nan if preferred)
+            # Outside support → fill (NaN by default)
+            if np.isnan(outside_support_fill):
+                Z = np.where(mask, Z, np.nan)
+            else:
+                Z = np.where(mask, Z, float(outside_support_fill))
 
+            # Drizzle floor to zero (does not touch NaNs)
             if drizzle_to_zero is not None:
-                Z[Z < float(drizzle_to_zero)] = 0.0
+                Z = np.where(np.isfinite(Z) & (Z < float(drizzle_to_zero)), 0.0, Z)
 
             return it, Z, int(wet.sum()), int(len(val_tr)), True
         except Exception:
-            return it, np.zeros_like(LON, float), int(wet.sum()), int(len(val_tr)), False
+            Z = np.full_like(LON, insufficient_training_fill, float)
+            return it, Z, int(wet.sum()), int(len(val_tr)), False
 
     backend = "loky" if parallel_backend_name == "processes" else "threading"
     with parallel_backend(backend):
@@ -521,15 +560,10 @@ def grid_rain_15min_rainlink_ok(
         )
 
     for it, Z, nwet, ntrain, ok_flag in results:
-        if Z is None:
-            continue
         out[it, :, :] = Z
         diag["wet_counts"].append(nwet)
         diag["train_counts"].append(ntrain)
-        if ok_flag:
-            diag["counts"]["ok"] += 1
-        else:
-            diag["counts"]["fallback_zero"] += 1
+        diag["counts"]["ok" if ok_flag else "fallback"] += 1
 
     da = xr.DataArray(
         out, coords={"time": times.tz_localize(None), "lat": yv, "lon": xv},

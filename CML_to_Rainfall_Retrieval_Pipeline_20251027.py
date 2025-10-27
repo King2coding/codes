@@ -190,10 +190,27 @@ t_plot = pd.Timestamp(R_da_rl["time"][int(np.nanargmax(mx))].values)#t_peak, '20
 plot_slice_cartopy_with_links(
     R_da_rl,
     meta_xy_grid,
-    t='2025-06-19 16:45:00', #t_plot,
-    vmin=1.0, vmax=15.0, nbins=16,
+    t='2025-06-19 15:00:00', #t_plot,
+    vmin=0.0, vmax=8.0, nbins=16,
     extent=(-3.25, 1.2, 4.8, 11.15),
     cmap_name="Blues",
     # optional niceties:
     cbar_side="right", cbar_size="4%", cbar_pad=0.05
 )
+
+#%% Save slices
+from pipeline_modes import save_each_time_to_netcdf
+
+out_paths = save_each_time_to_netcdf(
+    R_da_rl,
+    out_dir="/home/kkumah/Projects/cml-stuff/out_cml_rain_dir",
+    base_name="ghana_cml_R",
+    engine="netcdf4",
+    complevel=5,
+    dtype="float32",
+    fill_value=-9999.0,     # or np.nan if you prefer
+    chunks_lat=256,
+    chunks_lon=256,
+    keep_time_dim=True
+)
+print(f"Wrote {len(out_paths)} files. First:\n", out_paths[:3])

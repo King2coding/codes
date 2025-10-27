@@ -292,3 +292,117 @@ def apply_wet_gate_and_drizzle(df_rate: pd.DataFrame,
 
     out["R_mm_per_h"] = np.where(R_safe < float(drizzle), 0.0, R_safe)
     return out.drop(columns=["wet"])
+
+# --- save_slices.py (you can paste this near your step6 code or in a utils file) ---
+import os
+import numpy as np
+import pandas as pd
+import xarray as xr
+
+def save_each_time_to_netcdf(
+    data,                           # xr.DataArray OR xr.Dataset (with var_name)
+    out_dir,
+    base_name="ghana_cml_R",
+    *,
+    var_name="R_mm_per_h",          # ignored if data is a DataArray
+    engine="netcdf4",               # or "h5netcdf"
+    complevel=9,
+    dtype="float32",
+    fill_value=np.nan,              # what to write for NaNs
+    chunks_lat=256,
+    chunks_lon=256,
+    keep_time_dim=True,             # keep a size-1 time dimension in each file
+):
+    """
+    Writes one .nc per timestamp with high compression and correct chunking.
+    Returns list of written file paths.
+    """
+    os.makedirs(out_dir, exist_ok=True)
+
+    # Normalize to a DataArray
+    if isinstance(data, xr.Dataset):
+        if var_name not in data.data_vars and len(data.data_vars) == 1:
+            var_name = list(data.data_vars)[0]
+        da = data[var_name]
+    elif isinstance(data, xr.DataArray):
+        var_name = data.name or var_name
+        da = data
+    else:
+        raise TypeError("data must be an xarray DataArray or Dataset")
+
+    # If no time dimension, write a single file and return
+    if "time" not in da.dims:
+        d2 = da.astype(dtype)
+        ds = d2.to_dataset(name=var_name)
+        # chunks: match dims exactly
+        dims = ds[var_name].dims
+        sizes = ds[var_name].sizes
+        chunks = []
+        for d in dims:
+            if d == "lat":
+                chunks.append(min(int(chunks_lat), sizes[d]))
+            elif d == "lon":
+                chunks.append(min(int(chunks_lon), sizes[d]))
+            else:
+                chunks.append(min(1, sizes[d]))
+        enc = {
+            var_name: {
+                "zlib": True, "complevel": int(complevel), "shuffle": True,
+                "dtype": dtype, "_FillValue": fill_value,
+                "chunksizes": tuple(chunks),
+            }
+        }
+        fn = os.path.join(out_dir, f"{base_name}.nc")
+        ds.to_netcdf(fn, engine=engine, encoding=enc)
+        return [fn]
+
+    # Otherwise iterate times
+    times = pd.to_datetime(da["time"].values)
+    out_paths = []
+
+    for t in times:
+        # 2-D slice (lat,lon)
+        sl = da.sel(time=np.datetime64(t)).astype(dtype)
+
+        # Keep time dim? -> expand to (time,lat,lon) of length 1
+        if keep_time_dim:
+            sl = sl.expand_dims(time=[np.datetime64(t)])
+        ds = sl.to_dataset(name=var_name)
+
+        # Build chunks tuple that matches EXACT dims order
+        dims = ds[var_name].dims             # e.g., ('time','lat','lon') or ('lat','lon')
+        sizes = ds[var_name].sizes
+        chunks = []
+        for d in dims:
+            if d == "time":
+                chunks.append(1)
+            elif d == "lat":
+                chunks.append(min(int(chunks_lat), sizes[d]))
+            elif d == "lon":
+                chunks.append(min(int(chunks_lon), sizes[d]))
+            else:
+                # Unknown dim: just chunk by its full size
+                chunks.append(sizes[d])
+
+        enc = {
+            var_name: {
+                "zlib": True, "complevel": int(complevel), "shuffle": True,
+                "dtype": dtype, "_FillValue": fill_value,
+                "chunksizes": tuple(chunks),
+            },
+            # coords (don’t compress tiny arrays)
+            "lat": {"zlib": False},
+            "lon": {"zlib": False},
+            "time": {"zlib": False},
+        }
+
+        # Nice filename stamp: YYYYmmddTHHMMSS
+        t_str = pd.Timestamp(t).strftime("%Y%m%dT%H%M%S")
+        fn = os.path.join(out_dir, f"{base_name}_{t_str}.nc")
+
+        # Use unlimited time when present
+        unlimited = {"time"} if keep_time_dim else None
+        ds.to_netcdf(fn, engine=engine, encoding=enc, unlimited_dims=unlimited)
+        out_paths.append(fn)
+
+    return out_paths
