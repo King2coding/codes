@@ -152,91 +152,133 @@ df_s12 = integrate_wetdry_and_excess(
 df_s12 = _utcify_index(df_s12)
 assert "is_wet_final" in df_s12.columns
 
-# *** keep a copy of the original mask before temporal rescue ***
+# Keep original Rainlink-style mask for diagnostics
 df_s12["is_wet_final_orig"] = df_s12["is_wet_final"].astype("uint8")
 
 print("Step 2b (integrated wet mask) done. Columns:", df_s12.columns.tolist())
 
 # ==============================
-# Attach A_ex_pool_per_km + neighbour counts from S1b (ONLY if missing)
+# Attach A_ex_pool_per_km + neighbour counts from S1b
+# ==============================
 cols_from_ex = []
-if ("A_ex_pool_per_km" not in df_s12.columns) and ("A_ex_pool_per_km" in df_ex.columns):
+if "A_ex_pool_per_km" in df_ex.columns:
     cols_from_ex.append("A_ex_pool_per_km")
-if ("nb_count_ex" not in df_s12.columns) and ("nb_count_ex" in df_ex.columns):
+if "nb_count_ex" in df_ex.columns:
     cols_from_ex.append("nb_count_ex")
+
 if cols_from_ex:
     df_s12 = _merge_on_id_time(df_s12, df_ex, cols_from_ex)
 
+# At this point df_s12 should contain:
+# ['ID', ..., 'is_wet_final', 'is_wet_final_orig',
+#  'A_ex_pool_per_km', 'nb_count_ex', ...]
+
 # -----------------------------
-# NEW: Step 1c — temporal rescue
+# (Optional) temporal rescue (1c)
 # -----------------------------
 import importlib, step1c_temporal_rescue as s1c
 importlib.reload(s1c)
 from step1c_temporal_rescue import TemporalRescueConfig, apply_temporal_rescue
 
-# Decide which gamma-like column we actually have
-gamma_candidates = [
-    "A_ex_pool_per_km",
-    "A_ex_pool_per_km_x",
-    "A_ex_pool_per_km_y",
-    "A_excess_db_per_km",
-    "A_excess_db_per_km_x",
-    "A_excess_db_per_km_y",
-]
+# Work on a copy with time as a normal column
+df_tr_in = df_s12.reset_index()     # first column = time col (e.g. 'time_utc')
+time_col = df_tr_in.columns[0]
+
+# Robust choice of gamma-like column for temporal rescue
 gamma_col = None
-for c in gamma_candidates:
-    if c in df_s12.columns:
-        gamma_col = c
+for cand in ["A_ex_pool_per_km", "A_excess_db_per_km"]:
+    if cand in df_tr_in.columns:
+        gamma_col = cand
         break
 
 if gamma_col is None:
+    # Nothing suitable to drive temporal rescue → skip cleanly
+    print("Temporal rescue: SKIPPED (no A_ex_* column found). "
+          "Available columns:", list(df_tr_in.columns))
+    tr_sum = {"skipped": True}
+else:
+    # neighbour count column (optional)
+    nb_col = "nb_count_ex" if "nb_count_ex" in df_tr_in.columns else None
+
+    tr_cfg = TemporalRescueConfig(
+        gamma_col=gamma_col,
+        nb_col=nb_col,
+        wet_col="is_wet_final",
+        max_nb_for_rescue=2,
+        gamma_thr_db_per_km=0.03,
+        min_run_bins=2,
+        require_network_anchor=True,
+        min_network_wet_frac=0.05,
+    )
+
+    df_tr_out, tr_sum = apply_temporal_rescue(df_tr_in, tr_cfg)
+    print("Temporal rescue summary:", tr_sum)
+
+    # Restore DatetimeIndex from the time column
+    df_tr_out = df_tr_out.set_index(time_col).sort_index()
+
+    # ensure UTC tz-aware index (same convention as elsewhere)
+    if df_tr_out.index.tz is None:
+        df_tr_out.index = df_tr_out.index.tz_localize("UTC")
+    else:
+        df_tr_out.index = df_tr_out.index.tz_convert("UTC")
+
+    # Drop any stray unnamed column
+    if None in df_tr_out.columns:
+        df_tr_out = df_tr_out.drop(columns=[None])
+
+    df_s12 = df_tr_out
+
+# -----------------------------
+# NEW: Step 1d — single-link fallback (Option B: 0.05 dB/km)
+# -----------------------------
+import step1d_singlelink_fallback as s1d
+importlib.reload(s1d)
+from step1d_singlelink_fallback import SingleLinkConfig, apply_singlelink_fallback
+
+# Decide which gamma-like column is present
+if "A_ex_pool_per_km" in df_s12.columns:
+    gamma_col = "A_ex_pool_per_km"
+elif "A_excess_db_per_km" in df_s12.columns:
+    gamma_col = "A_excess_db_per_km"
+else:
     raise ValueError(
-        "Temporal rescue: no suitable gamma column found in df_s12. "
-        "Need one of "
-        "'A_ex_pool_per_km[_x/_y]' or 'A_excess_db_per_km[_x/_y]'.\n"
+        "Single-link fallback: need one of 'A_ex_pool_per_km' or 'A_excess_db_per_km'. "
         f"Available columns: {list(df_s12.columns)}"
     )
 
-# neighbour-count column (optional)
-nb_candidates = ["nb_count_ex", "nb_count_ex_x", "nb_count_ex_y"]
-nb_col = None
-for c in nb_candidates:
-    if c in df_s12.columns:
-        nb_col = c
-        break
+nb_col = "nb_count_ex" if "nb_count_ex" in df_s12.columns else None
 
-# Make time a normal column for the rescue function
-df_tr_in = df_s12.reset_index()          # index -> column (likely named 'time_utc')
-time_col = "time_utc" if "time_utc" in df_tr_in.columns else df_tr_in.columns[0]
-
-tr_cfg = TemporalRescueConfig(
+sl_cfg = SingleLinkConfig(
     gamma_col=gamma_col,
     nb_col=nb_col,
     wet_col="is_wet_final",
-    max_nb_for_rescue=2,          # rescue where neighbour info is weak
-    gamma_thr_db_per_km=0.03,
+    thr_db_per_km=0.05,     # <<< Option B
     min_run_bins=2,
-    require_network_anchor=True,
-    min_network_wet_frac=0.05,
+    max_nb_for_fallback=2,
 )
 
-df_tr_out, tr_sum = apply_temporal_rescue(df_tr_in, tr_cfg)
-print("Temporal rescue summary:", tr_sum)
+df_s12, sl_sum = apply_singlelink_fallback(df_s12, sl_cfg)
+print("Single-link fallback summary:", sl_sum)
 
-# Restore DatetimeIndex from the time column (time_col = 'time_utc')
-df_tr_out = df_tr_out.set_index(time_col).sort_index()
+# -----------------------------
+# Attach metadata if still missing (for WA and k–α)
+# -----------------------------
+need_meta = ["PathLength", "Frequency", "Polarization"]
+if not set(need_meta).issubset(df_s12.columns):
+    df_s12 = _merge_on_id_time(df_s12, df_step2, need_meta)
 
-# ensure UTC tz-aware index
-if df_tr_out.index.tz is None:
-    df_tr_out.index = df_tr_out.index.tz_localize("UTC")
-else:
-    df_tr_out.index = df_tr_out.index.tz_convert("UTC")
+# Pick WA source automatically
+wa_src = "A_ex_pool_per_km" if "A_ex_pool_per_km" in df_s12.columns else (
+         "A_excess_db_per_km" if "A_excess_db_per_km" in df_s12.columns else None
+)
+if wa_src is None:
+    raise ValueError(
+        "No per-km excess column found. Need 'A_ex_pool_per_km' (preferred) "
+        "or 'A_excess_db_per_km'."
+    )
 
-# drop any stray unnamed column that came out of the function
-if None in df_tr_out.columns:
-    df_tr_out = df_tr_out.drop(columns=[None])
-
-df_s12 = df_tr_out
+print("Wet-antenna γ source:", wa_src)
 #%%
 # ========= Sanity check: temporal rescue vs original mask =========
 import numpy as np
@@ -396,7 +438,7 @@ cfg_k = KAlphaConfigV2(
     pol_col="Polarization",
     freq_col="Frequency",
     gamma_col="gamma_corr_db_per_km",
-    gamma_gate_db_per_km=0.02,
+    gamma_gate_db_per_km=0.01,
     use_wet_mask_col="is_wet_final",
     r_cap_mmph_by_band={6: 60, 8: 80, 19: 120},
 )
@@ -503,8 +545,8 @@ R_da, diag_rl = s6pcm.grid_rain_15min_rainlink_ok(
     min_pts_ok=15,
     support_k=4,              # stricter spatial support
     support_radius_km=25.0,
-    drizzle_to_zero=0.30,     # kill sub-0.3 mm/h drizzle
-    n_jobs=15,
+    drizzle_to_zero=0.10,     # kill sub-0.3 mm/h drizzle
+    n_jobs=18,
     parallel_backend_name="processes",
 )
 print("Gridding diagnostics:")
@@ -535,6 +577,60 @@ plot_slice_cartopy_with_links(
     cbar_pad=0.05,
 )
 
+t_peak = pd.Timestamp(np.datetime64('2025-06-19T16:15:00.000000000'))
+
+plot_slice_cartopy_with_links(
+    R_da,
+    meta_xy_grid,
+    t=t_peak,
+    vmin=0.0,
+    vmax=15.0,
+    nbins=16,
+    extent=(-3.25, 1.2, 4.8, 11.15),
+    cmap_name="Blues",
+    cbar_side="right",
+    cbar_size="4%",
+    cbar_pad=0.05,
+)
+
+
+#=============================================================================
+import step6_grid_ok_pcm as s6pcm
+import importlib
+importlib.reload(s6pcm)
+
+t = pd.Timestamp("2025-06-19 16:15:00")
+
+meta_xy = (
+    df_clean.reset_index()[["ID","XStart","YStart","XEnd","YEnd"]]
+    .drop_duplicates("ID")
+)
+
+R1, d1 = s6pcm.grid_rain_at_time(
+    df_s5=df_s5[["ID","R_mm_per_h"]],
+    df_meta_for_xy=meta_xy,
+    t=t,
+    grid_res_deg=0.03, domain_pad_deg=0.2,
+    drizzle_to_zero=0.30,
+    idw_power=2.0,
+    idw_nnear=15,
+    idw_maxdist_km=30.0,
+    max_dist_km_mask=35.0,
+    smooth_kernel_px=3,
+    n_jobs=15,
+)
+
+print(d1)
+
+plot_slice_cartopy_with_links(
+    R1,
+    meta_xy,
+    t=t,
+    vmin=0.5, vmax=15.0, nbins=16,
+    extent=(-3.25, 1.2, 4.8, 11.15),
+    cmap_name="Blues",
+    cbar_side="right", cbar_size="4%", cbar_pad=0.05,
+)
 # %%
 # ===============================
 # Save each time slice to NetCDF
