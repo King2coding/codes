@@ -153,13 +153,40 @@ df_s12 = _utcify_index(df_s12)
 assert "is_wet_final" in df_s12.columns
 print("Step 2b (integrated wet mask) done. Columns:", df_s12.columns.tolist())
 
-# Attach metadata + excess-per-km if needed
+# Attach A_ex_pool_per_km + neighbour counts from S1b
+cols_from_ex = []
+if "A_ex_pool_per_km" in df_ex.columns:
+    cols_from_ex.append("A_ex_pool_per_km")
+if "nb_count_ex" in df_ex.columns:
+    cols_from_ex.append("nb_count_ex")
+if cols_from_ex:
+    df_s12 = _merge_on_id_time(df_s12, df_ex, cols_from_ex)
+
+# -----------------------------
+# NEW: Step 1c — temporal rescue
+# -----------------------------
+import importlib, step1c_temporal_rescue as s1c
+importlib.reload(s1c)
+from step1c_temporal_rescue import TemporalRescueConfig, apply_temporal_rescue
+
+tr_cfg = TemporalRescueConfig(
+    gamma_col="A_ex_pool_per_km",  # or "A_excess_db_per_km" if you prefer
+    nb_col="nb_count_ex",
+    wet_col="is_wet_final",
+    max_nb_for_rescue=2,          # rescue where neighbour info is weak
+    gamma_thr_db_per_km=0.03,
+    min_run_bins=2,
+    require_network_anchor=True,
+    min_network_wet_frac=0.05,
+)
+
+df_s12, tr_sum = apply_temporal_rescue(df_s12, tr_cfg)
+print("Temporal rescue summary:", tr_sum)
+
+# Attach metadata if still missing (for later WA / k–α steps)
 need_meta = ["PathLength", "Frequency", "Polarization"]
 if not set(need_meta).issubset(df_s12.columns):
     df_s12 = _merge_on_id_time(df_s12, df_step2, need_meta)
-
-if "A_ex_pool_per_km" not in df_s12.columns and "A_ex_pool_per_km" in df_ex.columns:
-    df_s12 = _merge_on_id_time(df_s12, df_ex, ["A_ex_pool_per_km"])
 
 # pick WA source automatically
 wa_src = "A_ex_pool_per_km" if "A_ex_pool_per_km" in df_s12.columns else (
@@ -171,7 +198,6 @@ if wa_src is None:
     )
 
 print("Wet-antenna γ source:", wa_src)
-
 # %%
 # ================================
 # Step 2c: Wet-antenna V2 (decay)
