@@ -151,13 +151,18 @@ df_s12 = integrate_wetdry_and_excess(
 )
 df_s12 = _utcify_index(df_s12)
 assert "is_wet_final" in df_s12.columns
+
+# *** keep a copy of the original mask before temporal rescue ***
+df_s12["is_wet_final_orig"] = df_s12["is_wet_final"].astype("uint8")
+
 print("Step 2b (integrated wet mask) done. Columns:", df_s12.columns.tolist())
 
-# Attach A_ex_pool_per_km + neighbour counts from S1b
+# ==============================
+# Attach A_ex_pool_per_km + neighbour counts from S1b (ONLY if missing)
 cols_from_ex = []
-if "A_ex_pool_per_km" in df_ex.columns:
+if ("A_ex_pool_per_km" not in df_s12.columns) and ("A_ex_pool_per_km" in df_ex.columns):
     cols_from_ex.append("A_ex_pool_per_km")
-if "nb_count_ex" in df_ex.columns:
+if ("nb_count_ex" not in df_s12.columns) and ("nb_count_ex" in df_ex.columns):
     cols_from_ex.append("nb_count_ex")
 if cols_from_ex:
     df_s12 = _merge_on_id_time(df_s12, df_ex, cols_from_ex)
@@ -169,9 +174,44 @@ import importlib, step1c_temporal_rescue as s1c
 importlib.reload(s1c)
 from step1c_temporal_rescue import TemporalRescueConfig, apply_temporal_rescue
 
+# Decide which gamma-like column we actually have
+gamma_candidates = [
+    "A_ex_pool_per_km",
+    "A_ex_pool_per_km_x",
+    "A_ex_pool_per_km_y",
+    "A_excess_db_per_km",
+    "A_excess_db_per_km_x",
+    "A_excess_db_per_km_y",
+]
+gamma_col = None
+for c in gamma_candidates:
+    if c in df_s12.columns:
+        gamma_col = c
+        break
+
+if gamma_col is None:
+    raise ValueError(
+        "Temporal rescue: no suitable gamma column found in df_s12. "
+        "Need one of "
+        "'A_ex_pool_per_km[_x/_y]' or 'A_excess_db_per_km[_x/_y]'.\n"
+        f"Available columns: {list(df_s12.columns)}"
+    )
+
+# neighbour-count column (optional)
+nb_candidates = ["nb_count_ex", "nb_count_ex_x", "nb_count_ex_y"]
+nb_col = None
+for c in nb_candidates:
+    if c in df_s12.columns:
+        nb_col = c
+        break
+
+# Make time a normal column for the rescue function
+df_tr_in = df_s12.reset_index()          # index -> column (likely named 'time_utc')
+time_col = "time_utc" if "time_utc" in df_tr_in.columns else df_tr_in.columns[0]
+
 tr_cfg = TemporalRescueConfig(
-    gamma_col="A_ex_pool_per_km",  # or "A_excess_db_per_km" if you prefer
-    nb_col="nb_count_ex",
+    gamma_col=gamma_col,
+    nb_col=nb_col,
     wet_col="is_wet_final",
     max_nb_for_rescue=2,          # rescue where neighbour info is weak
     gamma_thr_db_per_km=0.03,
@@ -180,24 +220,126 @@ tr_cfg = TemporalRescueConfig(
     min_network_wet_frac=0.05,
 )
 
-df_s12, tr_sum = apply_temporal_rescue(df_s12, tr_cfg)
+df_tr_out, tr_sum = apply_temporal_rescue(df_tr_in, tr_cfg)
 print("Temporal rescue summary:", tr_sum)
 
-# Attach metadata if still missing (for later WA / k–α steps)
-need_meta = ["PathLength", "Frequency", "Polarization"]
-if not set(need_meta).issubset(df_s12.columns):
-    df_s12 = _merge_on_id_time(df_s12, df_step2, need_meta)
+# Restore DatetimeIndex from the time column (time_col = 'time_utc')
+df_tr_out = df_tr_out.set_index(time_col).sort_index()
 
-# pick WA source automatically
-wa_src = "A_ex_pool_per_km" if "A_ex_pool_per_km" in df_s12.columns else (
-         "A_excess_db_per_km" if "A_excess_db_per_km" in df_s12.columns else None)
-if wa_src is None:
-    raise ValueError(
-        "No per-km excess column found. Need 'A_ex_pool_per_km' (preferred) "
-        "or 'A_excess_db_per_km'."
-    )
+# ensure UTC tz-aware index
+if df_tr_out.index.tz is None:
+    df_tr_out.index = df_tr_out.index.tz_localize("UTC")
+else:
+    df_tr_out.index = df_tr_out.index.tz_convert("UTC")
 
-print("Wet-antenna γ source:", wa_src)
+# drop any stray unnamed column that came out of the function
+if None in df_tr_out.columns:
+    df_tr_out = df_tr_out.drop(columns=[None])
+
+df_s12 = df_tr_out
+#%%
+# ========= Sanity check: temporal rescue vs original mask =========
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import matplotlib.dates as mdates
+
+# 0) Basic safety checks
+for col in ["is_wet_final_orig", "is_wet_final"]:
+    if col not in df_s12.columns:
+        raise RuntimeError(
+            f"Column '{col}' not found in df_s12. "
+            "Make sure you set df_s12['is_wet_final_orig'] "
+            "before calling apply_temporal_rescue."
+        )
+
+if "A_ex_pool_per_km" not in df_s12.columns:
+    print("WARNING: 'A_ex_pool_per_km' missing in df_s12; "
+          "temporal rescue sanity plots will only use masks, not gamma-like values.")
+
+# 1) Focus day: 2025-06-19 (tz-aware UTC to match df_s12.index)
+day0 = pd.Timestamp("2025-06-19 00:00:00", tz="UTC")
+day1 = pd.Timestamp("2025-06-19 23:59:59", tz="UTC")
+
+idx = df_s12.index
+if not isinstance(idx, pd.DatetimeIndex):
+    raise TypeError("df_s12.index must be a DatetimeIndex for this sanity check.")
+
+# This will now work because both sides are tz-aware UTC
+mask_day = (idx >= day0) & (idx <= day1)
+day = df_s12.loc[mask_day].copy()
+
+print("Rows on 2025-06-19:", len(day))
+
+# 2) Count how many wet flags before/after rescue
+orig_wet = day["is_wet_final_orig"].sum()
+new_wet  = day["is_wet_final"].sum()
+print(f"2025-06-19 — wet flags orig: {orig_wet}, after rescue: {new_wet}, diff: {new_wet - orig_wet}")
+
+# 3) Optional: histogram comparison of wet/dry counts
+plt.figure(figsize=(6,4))
+plt.bar(["orig_wet", "rescued_wet"], [orig_wet, new_wet])
+plt.title("Number of wet flags on 2025-06-19")
+plt.ylabel("count of (ID, time) flagged wet")
+plt.grid(axis="y", alpha=0.3)
+plt.show()
+
+# 4) Pick a link with changes and plot γ + masks around 16:15 UTC
+changed = day.groupby("ID").apply(
+    lambda d: (d["is_wet_final_orig"] != d["is_wet_final"]).any()
+)
+changed_ids = changed[changed].index.tolist()
+print("Links with any changed wet/dry on that day:", changed_ids[:10])
+
+if changed_ids:
+    link_id = changed_ids[0]
+    print("Plotting link:", link_id)
+
+    dlink = day[day["ID"] == link_id].copy()
+
+    # focus window around 16:15 UTC
+    t0 = pd.Timestamp("2025-06-19 12:00:00", tz="UTC")
+    t1 = pd.Timestamp("2025-06-19 20:00:00", tz="UTC")
+    dlink = dlink[(dlink.index >= t0) & (dlink.index <= t1)]
+
+    fig, ax = plt.subplots(3, 1, figsize=(12, 7), sharex=True)
+
+    # γ-like signal if available
+    if "A_ex_pool_per_km" in dlink.columns:
+        ax[0].plot(dlink.index, dlink["A_ex_pool_per_km"], label="A_ex_pool_per_km [dB/km]")
+        ax[0].set_ylabel("A_ex_pool_per_km")
+        ax[0].legend()
+        ax[0].grid(True, alpha=0.3)
+    else:
+        ax[0].text(0.5, 0.5, "A_ex_pool_per_km not available",
+                   transform=ax[0].transAxes, ha="center", va="center")
+        ax[0].set_axis_off()
+
+    # Wet masks
+    ax[1].step(dlink.index, dlink["is_wet_final_orig"], where="mid", label="orig wet", alpha=0.7)
+    ax[1].step(dlink.index, dlink["is_wet_final"], where="mid", label="rescued wet", alpha=0.7)
+    ax[1].set_ylabel("wet mask")
+    ax[1].legend()
+    ax[1].grid(True, alpha=0.3)
+
+    # Rain rate (if already computed)
+    if "R_mm_per_h" in dlink.columns:
+        ax[2].plot(dlink.index, dlink["R_mm_per_h"], label="R [mm/h]")
+        ax[2].set_ylabel("R [mm/h]")
+        ax[2].legend()
+        ax[2].grid(True, alpha=0.3)
+    else:
+        ax[2].text(0.5, 0.5, "R_mm_per_h not in df_s12 (that is fine at S2b stage)",
+                   transform=ax[2].transAxes, ha="center", va="center")
+        ax[2].set_axis_off()
+
+    ax[2].xaxis.set_major_formatter(mdates.DateFormatter("%Y-%m-%d\n%H:%M", tz=day.index.tz))
+    plt.suptitle(f"Temporal rescue sanity — link {link_id} on 2025-06-19")
+    plt.tight_layout()
+    plt.show()
+else:
+    print("No links with changed wet/dry flags on 2025-06-19.")
+
 # %%
 # ================================
 # Step 2c: Wet-antenna V2 (decay)
@@ -205,6 +347,24 @@ print("Wet-antenna γ source:", wa_src)
 import step2b_wet_antenna as wa
 importlib.reload(wa)
 from step2b_wet_antenna import WAConfigV2, apply_wet_antenna_decay
+
+# 1) Make sure meta is present
+need_meta = ["PathLength", "Frequency", "Polarization"]
+if not set(need_meta).issubset(df_s12.columns):
+    df_s12 = _merge_on_id_time(df_s12, df_step2, need_meta)
+    print("Merged meta into df_s12. Now has:", [c for c in need_meta if c in df_s12.columns])
+
+# 2) pick WA source automatically from df_s12
+wa_src = "A_ex_pool_per_km" if "A_ex_pool_per_km" in df_s12.columns else (
+         "A_excess_db_per_km" if "A_excess_db_per_km" in df_s12.columns else None
+)
+if wa_src is None:
+    raise ValueError(
+        "No per-km excess column found. Need 'A_ex_pool_per_km' (preferred) "
+        "or 'A_excess_db_per_km'. "
+        f"Available columns: {list(df_s12.columns)}"
+    )
+print("Wet-antenna γ source:", wa_src)
 
 cfg_wa = WAConfigV2(
     gamma_source_col=wa_src,        # from above
@@ -222,7 +382,6 @@ cfg_wa = WAConfigV2(
 df_attn = apply_wet_antenna_decay(df_s12, cfg_wa)
 df_attn = _utcify_index(df_attn)
 print("Step 2c (WA V2) done. Columns:", df_attn.columns.tolist())
-
 # %%
 # =============================
 # Step 3: k–α (γ → R, gated)
