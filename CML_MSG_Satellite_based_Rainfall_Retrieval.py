@@ -210,6 +210,7 @@ def geostationary_to_latlon(ds_msg,
     data_vars = {v: (("time", "lat", "lon"), arr) for v, arr in out.items()}
     return xr.Dataset(data_vars=data_vars,
                       coords={"time": times, "lat": lat_t, "lon": lon_t})
+
 #%% Main processing
 # 1) Discover files
 cml_files = _list_files(PATH_CML_RAIN)
@@ -275,216 +276,660 @@ assert np.allclose(msg_bt_ll.y, cml_on_msg.lat)
 assert np.allclose(msg_bt_ll.x, cml_on_msg.lon)
 
 
-#%% The Machine Learning Retrieval
-#%% Machine Learning Retrieval (XGB, day-wise splits)
+#%% Machine Learning Retrieval (XGB quantiles, day-wise splits; no classifier)
 import numpy as np
 import pandas as pd
 import xarray as xr
-
-# ML + metrics
 import xgboost as xgb
+from quantnn.quantiles import posterior_quantiles
 from sklearn.model_selection import GroupShuffleSplit
 from sklearn.metrics import mean_squared_error
 
 # --------------------
 # 0) Inputs already in memory
 # --------------------
-ds_bt   = msg_bt_ll.copy()     # has BT_IR108, BT_IR120, BT_WV062 (dims: time,y,x)
-ds_clm  = msg_clm_ll.copy()    # optional cloud mask dataset (unused in features here)
-ds_rain = cml_on_msg.copy()    # has R_mm_per_h (dims: time,y,x) — already on same grid
+ds_bt   = msg_bt_ll.copy()
+for v in ["BT_IR108", "BT_IR120", "BT_WV062"]:
+    ds_bt[v] = ds_bt[v].astype("float32")
+
+ds_clm  = msg_clm_ll.copy()
+ds_rain = cml_on_msg.copy()
 
 # --------------------
 # 1) Build features + target on common grid/time
 # --------------------
-BT_IR108 = ds_bt["BT_IR108"]
-BT_IR120 = ds_bt["BT_IR120"]
-BT_WV062 = ds_bt["BT_WV062"]
-BT_diff  = BT_IR108 - BT_WV062
+mask_cloud = (ds_clm["cloud_mask"] == 2)  # cloud pixels only
+BT_IR108 = ds_bt["BT_IR108"].where(mask_cloud)
+BT_IR120 = ds_bt["BT_IR120"].where(mask_cloud)
+BT_WV062 = ds_bt["BT_WV062"].where(mask_cloud)
+BT_diff  = (BT_IR108 - BT_WV062).where(mask_cloud)
 
-R = ds_rain["R_mm_per_h"]
+ds_rain["R_mm_per_h"] = ds_rain["R_mm_per_h"].astype("float32")
+if {"lat", "lon"}.issubset(ds_rain["R_mm_per_h"].dims):
+    ds_rain = ds_rain.rename({"lat": "y", "lon": "x"})
+R = ds_rain["R_mm_per_h"].where(ds_rain["R_mm_per_h"] >= 0.01, 0.0)  # drizzle gate optional
 
-# Ensure coords/order identical (strict join: all must overlap)
-BT_IR108, BT_IR120, BT_WV062, BT_diff, R = xr.align(
-    BT_IR108, BT_IR120, BT_WV062, BT_diff, R, join="exact"
+
+# --------------------
+# 2) 70/30 split by *day* (based on ds_bt.time)
+# --------------------
+days_all = np.asarray(pd.to_datetime(ds_bt.time.values).normalize(), dtype="datetime64[D]").astype(str)
+dummy    = np.arange(len(days_all))
+gss      = GroupShuffleSplit(n_splits=1, test_size=0.30, random_state=42)
+train_idx, val30_idx = next(gss.split(dummy, dummy, groups=days_all))
+
+times_all = ds_bt.time.values
+times_70  = times_all[train_idx]
+times_30  = times_all[val30_idx]
+
+# Select 70% times
+BT_IR108_70 = BT_IR108.sel(time=times_70)
+BT_IR120_70 = BT_IR120.sel(time=times_70)
+BT_WV062_70 = BT_WV062.sel(time=times_70)
+BT_diff_70  = BT_diff .sel(time=times_70)
+R_70        = R       .sel(time=times_70)
+
+# Align
+BT_IR108_70, BT_IR120_70, BT_WV062_70, BT_diff_70, R_70 = xr.align(
+    BT_IR108_70, BT_IR120_70, BT_WV062_70, BT_diff_70, R_70, join="exact"
 )
 
-# Harmonize NaNs: valid where all features and target are finite
-mask_valid = (
-    np.isfinite(BT_IR108) &
-    np.isfinite(BT_IR120) &
-    np.isfinite(BT_WV062) &
-    np.isfinite(R)
-)
-# If you want to gate by cloud mask presence too:
-# mask_valid = mask_valid & np.isfinite(ds_clm["cloud_mask"])
+# Features to ("sample","feature"), target to ("sample",)
+feat4 = xr.concat(
+    [BT_IR108_70, BT_IR120_70, BT_WV062_70, BT_diff_70],
+    dim=xr.DataArray(["IR108","IR120","WV062","IR108_minus_WV062"], dims="feature")
+).transpose("time","y","x","feature")
 
-# Stack to samples
-feat = (
-    xr.concat([BT_IR108, BT_IR120, BT_WV062, BT_diff], dim="feature")
-      .transpose("time", "y", "x", "feature")
-      .where(mask_valid)
-      .stack(sample=("time", "y", "x"))
-      .compute()
-)  # -> (sample, feature)
+feat4_s = feat4.stack(sample=("time","y","x")).transpose("sample","feature")
+tgt_s   = R_70.stack(sample=("time","y","x"))
 
-tgt = (
-    R.where(mask_valid)
-     .stack(sample=("time", "y", "x"))
-     .compute()
-)  # -> (sample,)
-
-# Valid mask over 'sample' (avoid apply_ufunc now that we've computed)
-mask = np.isfinite(feat).all("feature") & np.isfinite(tgt)
-feat = feat.isel(sample=mask)
-tgt  = tgt.isel(sample=mask)
-
-# Numpy arrays for XGB (float32 is ideal)
-X = feat.values.astype("float32")        # (n_valid, 4)
-y = tgt.values.astype("float32")         # (n_valid,)
+# Validity mask (concrete NumPy)
+valid = (np.isfinite(feat4_s).all("feature") & np.isfinite(tgt_s)).compute().values
+feat4_s = feat4_s.isel(sample=valid)
+tgt_s   = tgt_s.isel(sample=valid)
 
 # --------------------
-# 2) Day-wise grouping for independent splits
+# 3) Day-wise 70/30 split *over valid samples*
 # --------------------
-# After stacking, 'time' is a coordinate along 'sample'
-time_idx = pd.to_datetime(feat["time"].values)  # length == n_valid samples
-groups   = time_idx.strftime("%Y-%m-%d").values  # group id per sample
+times_s = np.asarray(pd.to_datetime(feat4_s["time"].values).normalize(), dtype="datetime64[D]")
+groups_per_sample = times_s.astype(str)
 
-# (Optional) If you want to roughly balance days across month thirds:
-# day_of_month = time_idx.day.values
-# strata = pd.cut(day_of_month, bins=[0,10,20,31], labels=[0,1,2]).astype(int)
-# You can stratify manually at the day level if needed; here we keep it simple.
+N = feat4_s.sizes["sample"]
+idx_all = np.arange(N)
+gss = GroupShuffleSplit(n_splits=1, test_size=0.30, random_state=42)
+idx70, idx30 = next(gss.split(idx_all, np.zeros(N), groups=groups_per_sample))
 
-# --------------------
-# 3) Split: 70% / 30% by day, then 10% of 70% for early stopping
-# --------------------
-rng = 42
-gss = GroupShuffleSplit(n_splits=1, test_size=0.30, random_state=rng)
-train_idx, val30_idx = next(gss.split(X, y, groups=groups))
+# Optional cap for RAM
+cap = 5_000_000
+if idx70.size > cap:
+    rng = np.random.RandomState(42)
+    idx70 = rng.choice(idx70, size=cap, replace=False)
 
-X_70, y_70, grp_70 = X[train_idx], y[train_idx], groups[train_idx]
-X_30, y_30, grp_30 = X[val30_idx], y[val30_idx], groups[val30_idx]
+feat_names = ["BT_IR108", "BT_IR120", "BT_WV062", "IR108_minus_WV062"]
+X_70 = feat4_s.isel(sample=idx70).values.astype("float32")
+y_70 = tgt_s   .isel(sample=idx70).values.astype("float32")
+X_30 = feat4_s.isel(sample=idx30).values.astype("float32")
+y_30 = tgt_s   .isel(sample=idx30).values.astype("float32")
 
-gss_inner = GroupShuffleSplit(n_splits=1, test_size=0.10, random_state=123)
-tr_idx, in_val_idx = next(gss_inner.split(X_70, y_70, groups=grp_70))
-
-X_tr,  y_tr   = X_70[tr_idx],    y_70[tr_idx]
-X_val, y_val  = X_70[in_val_idx],y_70[in_val_idx]
+print("Shapes → X_70:", X_70.shape, "y_70:", y_70.shape, "| X_30:", X_30.shape, "y_30:", y_30.shape)
 
 # --------------------
-# 4) (Optional) log1p transform for heavy-tailed rain
+# 4) Inner split INSIDE 70% (for early-stopping selection)
 # --------------------
-USE_LOG1P = True
-if USE_LOG1P:
-    y_tr_t   = np.log1p(y_tr)
-    y_val_t  = np.log1p(y_val)
-    y_70_t   = np.log1p(y_70)
-    invf     = np.expm1
-else:
-    y_tr_t, y_val_t, y_70_t = y_tr, y_val, y_70
-    invf = lambda z: z
+times_70 = times_s[idx70]
+uniq_days_70 = np.unique(times_70)
+rng = np.random.RandomState(123)
+rng.shuffle(uniq_days_70)
+inner_split = int(0.9 * len(uniq_days_70))
+days_tr, days_val = set(uniq_days_70[:inner_split]), set(uniq_days_70[inner_split:])
+m_tr  = np.isin(times_70, list(days_tr))
+m_val = np.isin(times_70, list(days_val))
 
-# --------------------
-# 5) Train XGBoost (mean model)
-# --------------------
-dtr  = xgb.DMatrix(X_tr,  label=y_tr_t)
-dval = xgb.DMatrix(X_val, label=y_val_t)
-
-params_mean = {
-    "objective": "reg:squarederror",
-    "tree_method": "hist",
-    "max_depth": 10,
-    "eta": 0.1,
-    "subsample": 0.8,
-    "colsample_bytree": 0.9,
-    "seed": 150,
-    "nthread": 0,  # use all cores
-}
-
-booster_mean = xgb.train(
-    params_mean,
-    dtr,
-    num_boost_round=500,
-    early_stopping_rounds=30,
-    evals=[(dtr, "train"), (dval, "val")],
-    verbose_eval=50
-)
-
-pred_tr_t  = booster_mean.predict(dtr)
-pred_val_t = booster_mean.predict(dval)
-
-# Invert transform if used
-pred_tr  = invf(pred_tr_t)
-pred_val = invf(pred_val_t)
+X_tr,  y_tr  = X_70[m_tr],  y_70[m_tr]
+X_val, y_val = X_70[m_val], y_70[m_val]
 
 # --------------------
-# 6) Metrics
+# 5) Quantile models (q=0.70/0.75/0.80) in log1p space
+# --------------------
+f, invf = np.log1p, np.expm1
+y_tr_t, y_val_t, y_30_t = f(y_tr), f(y_val), f(y_30)
+
+dtr  = xgb.DMatrix(X_tr,  label=y_tr_t,  feature_names=feat_names, nthread=12)
+dval = xgb.DMatrix(X_val, label=y_val_t, feature_names=feat_names, nthread=12)
+d30  = xgb.DMatrix(X_30,                  feature_names=feat_names, nthread=12)
+
+def train_quantile_model(alpha, dtrain, dvalid, num_boost_round=500, esr=30, seed=150):
+    params = {
+        "objective": "reg:quantileerror",  # xgboost >= 2.0
+        "quantile_alpha": float(alpha),
+        "tree_method": "hist",
+        "max_depth": 10,
+        "eta": 0.10,
+        "subsample": 0.8,
+        "colsample_bytree": 0.9,
+        "seed": seed,
+        "nthread": 12,
+    }
+    return xgb.train(params, dtrain, num_boost_round=num_boost_round,
+                     early_stopping_rounds=esr, evals=[(dtrain,"train"), (dvalid,"val")],
+                     verbose_eval=50)
+
+q_list = [0.70, 0.75, 0.80]
+boosters_q = {q: train_quantile_model(q, dtr, dval) for q in q_list}
+
+# TRANSFORMED preds → invert → enforce monotone → mean of three
+preds_val = {q: invf(boosters_q[q].predict(dval)) for q in q_list}
+preds_30  = {q: invf(boosters_q[q].predict(d30))  for q in q_list}
+
+# Non-crossing
+qs_sorted = sorted(q_list)
+stack_val = np.maximum.accumulate(np.vstack([preds_val[q] for q in qs_sorted]), axis=0)
+stack_30  = np.maximum.accumulate(np.vstack([preds_30[q]  for q in qs_sorted]), axis=0)
+
+preds_val_nc = {q: stack_val[i] for i, q in enumerate(qs_sorted)}
+preds_30_nc  = {q: stack_30[i]  for i, q in enumerate(qs_sorted)}
+
+final_val = (preds_val_nc[0.70] + preds_val_nc[0.75] + preds_val_nc[0.80]) / 3.0
+final_30  = (preds_30_nc [0.70] + preds_30_nc [0.75] + preds_30_nc [0.80]) / 3.0
+final_val = np.clip(final_val, 0.0, None)
+final_30  = np.clip(final_30,  0.0, None)
+
+# --------------------
+# 6) Metrics on inner and 30%
 # --------------------
 def rel_bias(obs, sim):
     m = np.isfinite(obs) & np.isfinite(sim)
-    if m.sum() == 0:
-        return np.nan
+    if not m.any(): return np.nan
     mu_res = np.nanmean(sim[m] - obs[m])
     mu_obs = np.nanmean(obs[m])
     return np.nan if mu_obs == 0 else mu_res / mu_obs
 
 def rmse(obs, sim):
     m = np.isfinite(obs) & np.isfinite(sim)
-    if m.sum() == 0:
-        return np.nan
+    if not m.any(): return np.nan
     return np.sqrt(mean_squared_error(obs[m], sim[m]))
 
 def corr(obs, sim):
     m = np.isfinite(obs) & np.isfinite(sim)
-    if m.sum() < 2:
-        return np.nan
+    if m.sum() < 2: return np.nan
     return np.corrcoef(obs[m], sim[m])[0, 1]
 
 def det_metrics(obs, sim, thr=0.1):
     m = np.isfinite(obs) & np.isfinite(sim)
-    if m.sum() == 0:
-        return (np.nan, np.nan, np.nan, np.nan)
-    o = obs[m] >= thr
-    s = sim[m] >= thr
-    TP = np.sum(s & o)
-    FP = np.sum(s & ~o)
-    FN = np.sum(~s & o)
-    pod = TP / (TP + FN) if (TP + FN) > 0 else np.nan
-    far = FP / (TP + FP) if (TP + FP) > 0 else np.nan
-    csi = TP / (TP + FP + FN) if (TP + FP + FN) > 0 else np.nan
-    db  = (TP + FP) / (TP + FN) if (TP + FN) > 0 else np.nan
+    if not m.any(): return (np.nan,)*4
+    o = obs[m] >= thr; s = sim[m] >= thr
+    TP = np.sum(s & o); FP = np.sum(s & ~o); FN = np.sum(~s & o)
+    pod = TP/(TP+FN) if (TP+FN) else np.nan
+    far = FP/(TP+FP) if (TP+FP) else np.nan
+    csi = TP/(TP+FP+FN) if (TP+FP+FN) else np.nan
+    db  = (TP+FP)/(TP+FN)  if (TP+FN)  else np.nan
     return pod, far, csi, db
 
-print("== Inner validation on 70% ==")
-print("RelBias:", rel_bias(y_val, pred_val))
-print("RMSE:", rmse(y_val, pred_val))
-print("Corr:",  corr(y_val, pred_val))
-print("POD, FAR, CSI, DetBias:", det_metrics(y_val, pred_val, thr=0.1))
+print("== Inner (mean of q70/75/80) ==")
+print("RelBias:", rel_bias(y_val, final_val))
+print("RMSE:",    rmse(y_val,  final_val))
+print("Corr:",     corr(y_val,  final_val))
+print("POD/FAR/CSI/DetBias:", det_metrics(y_val, final_val, thr=0.1))
 
+print("== Held-out 30% (mean of q70/75/80) ==")
+print("RelBias:", rel_bias(y_30, final_30))
+print("RMSE:",    rmse(y_30,  final_30))
+print("Corr:",     corr(y_30,  final_30))
+print("POD/FAR/CSI/DetBias:", det_metrics(y_30, final_30, thr=0.1))
+#%% Visualization of Inner Validation
+# plt scatter of yval and pred values
+plt.figure(figsize=(6,6))
+plt.scatter(y_val, final_val, alpha=0.3, s=5)
+plt.xlabel("Observed Rainfall (mm/h)")
+plt.ylabel("Predicted Rainfall (mm/h)")
+plt.title("XGB Satellite-based Rainfall Retrieval: Inner Validation")
+plt.xlim(0, 25)
+plt.ylim(0, 25)
+plt.plot([0, 25], [0, 25], 'r--')
+# add metrics
+text = f"RelBias: {rel_bias(y_val, final_val):.2f}\nRMSE: {rmse(y_val, final_val):.2f}\nCorr: {corr(y_val, final_val):.2f}"
+plt.text(0.1, 0.9, text, transform=plt.gca().transAxes)
+
+plt.grid(which='major', linestyle='--', alpha=0.5,lw=0.8)
+
+#%%
 # --------------------
-# 7) Retrain on full 70% and evaluate on independent 30%
+# 7) Retrain on FULL 70% and predict maps for 30% times
 # --------------------
-d70 = xgb.DMatrix(X_70, label=y_70_t)
-booster_final = xgb.train(
-    params_mean, d70,
-    num_boost_round=int(booster_mean.best_iteration * 1.1)  # small cushion
+# Train three quantile models on all 70%
+# --- Train dense quantiles on ALL 70% samples (not wet-only) ---
+f, invf = np.log1p, np.expm1
+d70_all = xgb.DMatrix(X_70, label=f(y_70), feature_names=feat_names, nthread=12)
+
+def train_quantile(alpha, dtrain, num_boost_round=600, seed=150):
+    params = {
+        "objective": "reg:quantileerror",
+        "quantile_alpha": float(alpha),
+        "tree_method": "hist",
+        "max_depth": 10,
+        "eta": 0.08,
+        "subsample": 0.8,
+        "colsample_bytree": 0.9,
+        "seed": seed,
+        "nthread": 12,
+    }
+    return xgb.train(params, dtrain, num_boost_round=num_boost_round)
+
+qs_dense = np.linspace(0, 1, 34)[1:-1]  #np.linspace(0.05, 0.95, 19)             # 5–95% every 5%
+boosters_by_q = {q: train_quantile(q, d70_all) for q in qs_dense}
+# --- Refit quantiles on WET-ONLY samples in log1p space ---
+# thr_wet   = 0.02
+# f, invf   = np.log1p, np.expm1
+# m_wet70   = (y_70 >= thr_wet)
+
+# X70_wet   = X_70[m_wet70]
+# y70_wet_t = f(y_70[m_wet70])
+
+# d70_reg = xgb.DMatrix(X70_wet, label=y70_wet_t, feature_names=feat_names, nthread=12)
+
+# def train_quantile(alpha, dtrain, num_boost_round=500, seed=150):
+#     params = {
+#         "objective": "reg:quantileerror",
+#         "quantile_alpha": float(alpha),
+#         "tree_method": "hist",
+#         "max_depth": 10,
+#         "eta": 0.08,
+#         "subsample": 0.8,
+#         "colsample_bytree": 0.9,
+#         "seed": seed,
+#         "nthread": 12,
+#     }
+#     return xgb.train(params, dtrain, num_boost_round=num_boost_round)
+
+# q_list = [0.70, 0.75, 0.80]
+# boosters_final = {q: train_quantile(q, d70_reg) for q in q_list}
+# --- after you build d70_reg (the DMatrix for wet training) ---
+# def train_quantile(alpha, dtrain, num_boost_round=500, seed=150):
+#     params = {
+#         "objective": "reg:quantileerror",
+#         "quantile_alpha": float(alpha),
+#         "tree_method": "hist",
+#         "max_depth": 10,
+#         "eta": 0.08,
+#         "subsample": 0.8,
+#         "colsample_bytree": 0.9,
+#         "seed": seed,
+#         "nthread": 12,
+#     }
+#     return xgb.train(params, dtrain, num_boost_round=num_boost_round)
+
+# q_list = [0.70, 0.75, 0.80]
+# boosters_by_q = {q: train_quantile(q, d70_reg) for q in q_list}
+
+# Helpers for patch correction (relaxed) & smoothing
+import numpy as np
+import pandas as pd
+import geopandas as gpd
+from shapely.geometry import shape
+from rasterio import features
+from rasterstats import zonal_stats
+from pyproj import CRS
+from rasterio.transform import from_bounds
+from scipy.ndimage import binary_opening, generate_binary_structure
+from scipy.ndimage import uniform_filter
+
+def array_to_vector(array, mask_values, trns):
+    """Return GeoDataFrame of polygons for pixels in mask_values."""
+    array = array.astype(np.int16)
+    wgs84 = CRS.from_epsg(4326).to_wkt()
+    mask = np.isin(array, mask_values)
+    recs = [
+        {"properties": {"raster_val": int(v)}, "geometry": shape(s)}
+        for _, (s, v) in enumerate(features.shapes(array, mask=mask, transform=trns))
+    ]
+    if not recs:
+        return gpd.GeoDataFrame(columns=["raster_val", "geometry"], crs=wgs84)
+    return gpd.GeoDataFrame.from_features(recs, crs=wgs84)
+
+def rasterize_me(meta_data, polygon2rasterize, rast_val):
+    """Rasterize a field from a GeoDataFrame onto a numpy array."""
+    out = np.full((meta_data["height"], meta_data["width"]), np.nan, dtype=meta_data["dtype"])
+    if len(polygon2rasterize) == 0:
+        return out
+    shp_gen = ((gm, vl) for gm, vl in zip(polygon2rasterize.geometry, polygon2rasterize[rast_val]))
+    return features.rasterize(shapes=shp_gen,
+                              fill=np.nan,
+                              out=out,
+                              transform=meta_data["transform"])
+
+def xarray_meta_from_da(da):
+    """Build rasterio-style meta dict from a 2D lon/lat DataArray (dims y,x)."""
+    height = da.sizes["y"]
+    width  = da.sizes["x"]
+    xmin, xmax = float(da["x"].values.min()), float(da["x"].values.max())
+    ymin, ymax = float(da["y"].values.min()), float(da["y"].values.max())
+    transform = from_bounds(xmin, ymin, xmax, ymax, width, height)
+    return {"height": height, "width": width, "transform": transform, "dtype": "float32"}
+
+def correct_wet_dry(
+    bin_rast,
+    bt_rastdat,
+    meta_data,
+    *,
+    k_std=0.5,             # your suggested penalty: mean + 0.5*std
+    p_low=0.30,            # also require IR108 ≤ local 30th percentile of each patch
+    abs_bt_max=270.0,      # and IR108 ≤ 270 K overall
+    min_patch_px=12,       # drop tiny wet blobs
+    morph_open=True        # denoise mask before stats
+):
+    """
+    bin_rast   : 2D int array 0/1 (wet/dry) to be corrected
+    bt_rastdat : 2D float IR108 array (same grid)
+    meta_data  : dict with keys {height,width,transform,dtype}
+
+    Keep rule (per patch):
+        IR108 <= min( mean + k*std, percentile_low, abs_bt_max )
+    """
+    wet0 = (bin_rast == 1)
+
+    # Optional: denoise small speckles before stats
+    if morph_open:
+        st = generate_binary_structure(2, 1)  # 3x3 cross
+        wet0 = binary_opening(wet0, structure=st)
+
+    # Remove very small patches
+    # (cheap approximation via convolution on neighbors count)
+    if min_patch_px > 1:
+        from scipy.ndimage import uniform_filter
+        neigh = uniform_filter(wet0.astype(float), size=3, mode="nearest") * 9
+        wet0 = np.where(neigh >= min_patch_px, wet0, 0)
+
+    # Vectorize remaining wet pixels
+    gdf = array_to_vector(wet0.astype(np.int16), mask_values=[1], trns=meta_data["transform"])
+    if len(gdf) == 0:
+        out = np.where(np.isfinite(bt_rastdat), 0, np.nan)
+        return out
+
+    # Patch stats
+    bt_for_stats = np.where(np.isfinite(bt_rastdat), bt_rastdat, -999.0)
+    zs = zonal_stats(
+        vectors=gdf.geometry, raster=bt_for_stats,
+        stats=["mean", "std", f"percentile_{int(p_low*100)}"],
+        affine=meta_data["transform"], nodata=-999.0
+    )
+    df = pd.DataFrame(zs).rename(columns={f"percentile_{int(p_low*100)}": "p_low"})
+    gdf = pd.concat([gdf.reset_index(drop=True), df.reset_index(drop=True)], axis=1)
+
+    # Rasterize thresholds back to grid
+    mean_r = rasterize_me(meta_data, gdf, "mean")
+    std_r  = rasterize_me(meta_data, gdf, "std")
+    plo_r  = rasterize_me(meta_data, gdf, "p_low")
+
+    # Composite threshold
+    thr = np.nanmin(np.dstack([mean_r + k_std*std_r, plo_r, np.full_like(mean_r, abs_bt_max)]), axis=2)
+
+    # Keep where IR108 is sufficiently cold within wet patches
+    keep = (wet0 == 1) & np.isfinite(bt_rastdat) & (bt_rastdat <= thr)
+
+    out = np.where(np.isfinite(bt_rastdat), keep.astype(np.int16), np.nan)
+    return out
+
+def correct_wet_mask(bin_rast, bt_rast, meta):
+    # relaxed: keep where BT <= mean + 2*std (per wet patch)
+    gdf = array_to_vector(bin_rast, [1], meta["transform"])
+    if len(gdf)==0: 
+        return bin_rast
+    bt_stats = np.where(np.isfinite(bt_rast), bt_rast, -999.0)
+    zs = zonal_stats(gdf.geometry, bt_stats, stats=["mean","std"],
+                     affine=meta["transform"], nodata=-999.0)
+    gdf = pd.concat([gdf.reset_index(drop=True), pd.DataFrame(zs)], axis=1)
+    mean_r = rasterize_me(meta, gdf, "mean"); std_r = rasterize_me(meta, gdf, "std")
+    keep = (bin_rast==1) & (bt_rast <= (mean_r))
+    out = np.where(keep, 1, 0).astype(np.int16)
+    out = np.where(np.isfinite(bt_rast), out, np.nan)
+    return out
+
+def smooth_da_mean(da, win=3):
+    wet = da.where(da > 0)
+    num = wet.rolling(y=win, x=win, center=True, min_periods=1).sum()
+    den = (~wet.isnull()).rolling(y=win, x=win, center=True, min_periods=1).sum()
+    sm  = (num/den).where(da > 0, 0.0).fillna(0.0)
+    sm.name = da.name; sm.attrs.update(da.attrs)
+    sm.attrs["long_name"] = f"{da.attrs.get('long_name','pred')} (rolling {win}x{win})"
+    return sm
+
+def predict_slice_meanq(time_val, win_smooth=3, apply_patch=True,
+                        drizzle_floor=0.10, use_trimmed=False):
+    # --- gather features ---
+    b1 = BT_IR108.sel(time=time_val).where(mask_cloud.sel(time=time_val))
+    b2 = BT_IR120.sel(time=time_val).where(mask_cloud.sel(time=time_val))
+    b3 = BT_WV062.sel(time=time_val).where(mask_cloud.sel(time=time_val))
+    bd = BT_diff .sel(time=time_val).where(mask_cloud.sel(time=time_val))
+    valid = np.isfinite(b1) & np.isfinite(b2) & np.isfinite(b3) & np.isfinite(bd)
+
+    if valid.sum().item() == 0:
+        out = xr.zeros_like(b1).fillna(0.0); out.name = "R_pred_mm_per_h"
+        return out, out
+
+    X_t = np.column_stack([b1.values[valid], b2.values[valid],
+                           b3.values[valid], bd.values[valid]]).astype("float32")
+    dX  = xgb.DMatrix(X_t, feature_names=feat_names, nthread=12)
+
+    # --- DENSE quantile aggregation (Option A) ---
+    # predict in log1p-space, then invert; stack (N, n_q), enforce non-crossing
+    pred_list = [invf(boosters_by_q[q].predict(dX)) for q in qs_dense]
+    Yq = np.column_stack(pred_list).astype("float32")         # shape (Nvalid, n_q)
+    Yq = np.maximum.accumulate(Yq, axis=1)                    # enforce monotone
+
+    # aggregator: posterior mean (stable) or trimmed mean over mid-quantiles
+    try:
+        from quantnn.quantiles import posterior_mean
+        r_flat = posterior_mean(Yq, quantiles=qs_dense).astype("float32")
+    except Exception:
+        # fallback: trimmed mean over 0.30–0.90
+        m = (qs_dense >= 0.30) & (qs_dense <= 0.90) if use_trimmed else slice(None)
+        r_flat = Yq[:, m].mean(axis=1).astype("float32")
+
+    # --- rebuild map ---
+    rain_map = xr.full_like(b1, np.nan, dtype="float32")
+    rain_map.values[valid] = np.clip(r_flat, 0.0, None)
+    rain_map = rain_map.fillna(0.0)
+    rain_map.name = "R_pred_mm_per_h"
+    rain_map.attrs["long_name"] = "Rainfall intensity (dense-quantile posterior mean)"
+    rain_map.attrs["units"] = "mm h-1"
+
+    # drizzle filter then smoothing
+    if drizzle_floor is not None:
+        rain_map.values = np.where(rain_map.values < drizzle_floor, 0.0, rain_map.values)
+    if win_smooth and win_smooth > 1:
+        rain_map = smooth_da_mean(rain_map, win=win_smooth)
+
+    rain_map_cor = rain_map.copy()
+
+    # optional patch correction by IR108
+    if apply_patch:
+        meta = xarray_meta_from_da(b1)
+        wet_grid = (rain_map.values > 0).astype(np.int16)
+        corr_wet = correct_wet_mask(wet_grid, b1.values.astype("float32"), meta)
+        
+        rain_map_cor = rain_map_cor.where(corr_wet == 1, 0.0)
+    # smoothing
+    rain_smooth = smooth_da_mean(rain_map_cor, win=win_smooth)
+    return rain_smooth, rain_map
+
+
+def predict_slice_with_correction(time_val, drizzle_floor=0.10, smooth_size=3):
+    # === gather features & mask ===
+    b1 = BT_IR108.sel(time=time_val).where(mask_cloud.sel(time=time_val))
+    b2 = BT_IR120.sel(time=time_val).where(mask_cloud.sel(time=time_val))
+    b3 = BT_WV062.sel(time=time_val).where(mask_cloud.sel(time=time_val))
+    bd = BT_diff .sel(time=time_val).where(mask_cloud.sel(time=time_val))
+    valid = np.isfinite(b1) & np.isfinite(b2) & np.isfinite(b3) & np.isfinite(bd)
+
+    if valid.sum().item() == 0:
+        out = xr.zeros_like(b1).fillna(0.0)
+        out.name = "R_pred_mm_per_h"
+        return out, out
+
+    X_t = np.column_stack([
+        b1.values[valid], b2.values[valid],
+        b3.values[valid], bd.values[valid]
+    ]).astype("float32")
+
+    # Quantile predictions (log1p space → invert)
+    d_t = xgb.DMatrix(X_t, feature_names=feat_names, nthread=12)
+    q_list = [0.70, 0.75, 0.80]
+
+    preds = [invf(boosters_by_q[q].predict(d_t)) for q in q_list]  # list of (Nvalid,)
+    Y     = np.vstack(preds)                                       # (3, Nvalid)
+    Y     = np.maximum.accumulate(Y, axis=0)                       # enforce non-crossing
+    rain_flat = Y.mean(axis=0).astype("float32")                   # mean of q70/75/80             # mean over q70/75/80
+
+    # Rebuild 2D and apply drizzle floor + smoothing
+    rain_map = xr.full_like(b1, np.nan, dtype="float32")
+    rain_map.values[valid] = rain_flat
+    rain_map = rain_map.fillna(0.0)
+
+    if smooth_size and smooth_size > 1:
+        sm = uniform_filter(rain_map.values, size=smooth_size, mode="nearest")
+        rain_map.values = sm
+
+    rain_map.values = np.where(rain_map.values < drizzle_floor, 0.0, rain_map.values)
+
+    # === patch-based correction using IR108 (stricter/adaptive) ===
+    meta = xarray_meta_from_da(b1)
+
+    # initial “wet” mask from predicted rain after smoothing/floor
+    wet_grid = (rain_map.values >= drizzle_floor).astype(np.int16)
+    bt_array = b1.values.astype("float32")
+
+    corr_wet = correct_wet_dry(
+        wet_grid, bt_array, meta,
+        k_std=0.5,        # your new penalty
+        p_low=0.30,       # 30th percentile cap
+        abs_bt_max=270.0, # absolute cap in K
+        min_patch_px=12,
+        morph_open=True
+    )
+
+    # Zero predicted rain where corrected mask says "dry"
+    rain_corr = rain_map.where(corr_wet == 1, 0.0)
+    rain_corr.name = "R_pred_mm_per_h"
+    rain_corr.attrs["long_name"] = "XGB mean(q70/75/80) rainfall (IR108 patch-corrected, smoothed)"
+    rain_corr.attrs["units"] = "mm h-1"
+    return rain_corr, rain_map
+
+# Run over held-out 30% times
+pred_pairs = [predict_slice_meanq(t, win_smooth=3, apply_patch=True) for t in times_30]
+R_pred_30_corr        = xr.concat([p[0] for p in pred_pairs], dim="time").transpose("time","y","x")
+R_pred_30_uncorrected = xr.concat([p[1] for p in pred_pairs], dim="time").transpose("time","y","x")
+R_pred_30_corr["time"]        = times_30
+R_pred_30_uncorrected["time"] = times_30
+
+# pred_maps_corr = [predict_slice_with_correction(t, drizzle_floor=0.10, smooth_size=3) for t in times_30]
+# R_pred_30_corr        = xr.concat([p[0] for p in pred_maps_corr], dim="time").transpose("time","y","x")
+# R_pred_uncorrected_30 = xr.concat([p[1] for p in pred_maps_corr], dim="time").transpose("time","y","x")
+# R_pred_30_corr["time"] = times_30
+# R_pred_uncorrected_30["time"] = times_30
+#%% # --------------------
+# 8) Quick viz of one slice
+# --------------------
+# --- Discrete rainfall styling (21 colors over [0, 8]) ---
+import numpy as np
+import matplotlib.pyplot as plt
+import matplotlib.colors as mcolors
+from matplotlib.patches import Patch
+import cartopy.crs as ccrs
+import cartopy.feature as cfeature
+from matplotlib.gridspec import GridSpec
+
+vmin_r, vmax_r = 0.0, 5.0
+
+n_colors = 21
+rain_bounds = np.linspace(vmin_r, vmax_r, n_colors)
+rain_norm   = mcolors.BoundaryNorm(rain_bounds, ncolors=256)
+rain_cmap   = plt.get_cmap("turbo")
+rain_ticks  = np.round(rain_bounds[::2], 1)
+
+# --- Choose a time slice ---
+t0 = times_30[92]
+t0_str = np.datetime_as_string(t0, unit='m')
+
+# --- Pull inputs for t0 (only IR108 and CLM as requested) ---
+bt108 = BT_IR108.sel(time=t0).where(mask_cloud.sel(time=t0))
+clm   = ds_clm["cloud_mask"].sel(time=t0)
+
+# Robust limits for BT
+bt_vmin, bt_vmax = np.nanpercentile(bt108, [2, 98])
+
+# --- Cloud mask (categorical) styling ---
+# 0 Clear water, 1 Clear land, 2 Cloud, 3 No data
+clm_bounds = [-0.5, 0.5, 1.5, 2.5, 3.5]
+clm_norm   = mcolors.BoundaryNorm(clm_bounds, ncolors=4)
+clm_cmap   = mcolors.ListedColormap(["#4477aa", "#66aa55", "#ffcc00", "#999999"])
+clm_labels = {0: "Clear water", 1: "Clear land", 2: "Cloud", 3: "No data"}
+legend_handles = [Patch(color=clm_cmap(i), label=clm_labels[i]) for i in range(4)]
+
+# --- Small helper for geostyling ---
+def add_geo(ax):
+    ax.coastlines(resolution="10m", linewidth=1.1, color="black")
+    ax.add_feature(cfeature.BORDERS, linewidth=0.9, edgecolor="black")
+    gl = ax.gridlines(draw_labels=True, linewidth=0.5, color="gray", alpha=0.7, linestyle="--")
+    gl.top_labels = False
+    gl.right_labels = False
+    gl.xlabel_style = {"size": 10, "color": "black"}
+    gl.ylabel_style = {"size": 10, "color": "black"}
+    gl.xlocator = plt.MultipleLocator(1.0)
+    gl.ylocator = plt.MultipleLocator(1.0)
+
+# --- Figure layout: 3 panels on top, 2 panels bottom ---
+fig = plt.figure(figsize=(18, 9), constrained_layout=True)
+gs  = GridSpec(2, 3, figure=fig, height_ratios=[1, 1])
+
+proj = ccrs.PlateCarree()
+
+ax_pred   = fig.add_subplot(gs[0, 0], projection=proj)
+ax_cml    = fig.add_subplot(gs[0, 1], projection=proj)
+ax_uncorr = fig.add_subplot(gs[0, 2], projection=proj)
+ax_bt108  = fig.add_subplot(gs[1, 0], projection=proj)
+ax_clm    = fig.add_subplot(gs[1, 1], projection=proj)
+# Leave gs[1,2] empty for a clean 2-wide bottom row
+fig.add_subplot(gs[1, 2]).axis("off")
+
+# --- Top row: rain maps (discrete colorbar) ---
+im0 = R_pred_30_corr.sel(time=t0).plot(
+    ax=ax_pred, transform=proj, cmap=rain_cmap, norm=rain_norm, add_colorbar=False
 )
+add_geo(ax_pred)
+ax_pred.set_title(f"Predicted rain (mean q70/75/80, smoothed)\n{t0_str}")
+cb0 = fig.colorbar(im0, ax=ax_pred, ticks=rain_ticks, fraction=0.046, pad=0.04)
+cb0.set_label("mm h$^{-1}$")
 
-pred_30_t = booster_final.predict(xgb.DMatrix(X_30))
-pred_30   = invf(pred_30_t)
+im1 = R.sel(time=t0).plot(
+    ax=ax_cml, transform=proj, cmap=rain_cmap, norm=rain_norm, add_colorbar=False
+)
+add_geo(ax_cml)
+ax_cml.set_title("CML rain")
+cb1 = fig.colorbar(im1, ax=ax_cml, ticks=rain_ticks, fraction=0.046, pad=0.04)
+cb1.set_label("mm h$^{-1}$")
 
-print("== Independent 30% ==")
-print("RelBias:", rel_bias(y_30, pred_30))
-print("RMSE:", rmse(y_30, pred_30))
-print("Corr:",  corr(y_30, pred_30))
-print("POD, FAR, CSI, DetBias:", det_metrics(y_30, pred_30, thr=0.1))
+im2 = R_pred_30_uncorrected.sel(time=t0).plot(
+    ax=ax_uncorr, transform=proj, cmap=rain_cmap, norm=rain_norm, add_colorbar=False
+)
+add_geo(ax_uncorr)
+ax_uncorr.set_title(f"Predicted rain (uncorrected)\n{t0_str}")
+cb2 = fig.colorbar(im2, ax=ax_uncorr, ticks=rain_ticks, fraction=0.046, pad=0.04)
+cb2.set_label("mm h$^{-1}$")
 
-# --------------------
-# 8) (Optional) Feature importances & housekeeping
-# --------------------
-# Feature names for clarity
-booster_final.feature_names = ["BT_IR108", "BT_IR120", "BT_WV062", "BT_diff"]
-print("Feature importance (gain):")
-print(booster_final.get_score(importance_type="gain"))
+# --- Bottom row: inputs (IR108 BT and Cloud Mask) ---
+im3 = bt108.plot(
+    ax=ax_bt108, transform=proj, cmap="viridis", vmin=bt_vmin, vmax=bt_vmax, add_colorbar=False
+)
+add_geo(ax_bt108)
+ax_bt108.set_title("IR108 Brightness Temperature [K]")
+cb3 = fig.colorbar(im3, ax=ax_bt108, fraction=0.046, pad=0.04)
+cb3.set_label("K")
 
-# If memory is tight, drop big intermediates
-del BT_IR108, BT_IR120, BT_WV062, BT_diff, R
+im5 = clm.plot(
+    ax=ax_clm, transform=proj, cmap=clm_cmap, norm=clm_norm, add_colorbar=False
+)
+add_geo(ax_clm)
+ax_clm.set_title("Cloud mask (0/1/2/3)")
+ax_clm.legend(handles=legend_handles, loc="lower left", frameon=True)
+
+plt.show()

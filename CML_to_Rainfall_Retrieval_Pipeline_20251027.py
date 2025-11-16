@@ -58,10 +58,6 @@ df_rate = pm.rainlink_strict_R(dfA, R_min=0.0)
 df_rate_gated = pm.apply_wet_gate_and_drizzle(df_rate, dfA, drizzle=0.20)
 print(df_rate_gated[["link_id","time","R_mm_per_h"]].head())
 
-# 4) gate by strict wet mask & apply a drizzle cut (default 0.20 mm/h)
-df_rate_gated = pm.apply_wet_gate_and_drizzle(df_rate, dfA, drizzle=0.20)
-print(df_rate_gated[["link_id","time","R_mm_per_h"]].head())
-
 # --- 0) Ensure we use the SAME key on both tables ---------------------------
 # ts_15 and df_rate came from pipeline_modes (they both have `link_id`)
 
