@@ -17,7 +17,7 @@ from rioxarray.merge import merge_arrays
 
 #%%
 # define paths
-PATH_CML_RAIN = r'/home/kkumah/Projects/cml-stuff/out_cml_rain_dir'
+PATH_CML_RAIN = r'/home/kkumah/Projects/cml-stuff/out_cml_rain_dir_2025-11-17'
 PATH_MSG_BT = r'/home/kkumah/Projects/cml-stuff/satellite_data/msg/run_20251027_201416'
 PATH_MSG_CLM = r'/home/kkumah/Projects/cml-stuff/satellite_data/msg_clm/run_20251027_201601'
 

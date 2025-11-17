@@ -570,3 +570,9 @@ def grid_rain_15min_rainlink_ok(
         dims=("time", "lat", "lon"), name="R_mm_per_h", attrs={"units": "mm h-1"}
     )
     return da, diag
+
+
+def grid_rain_at_time_rainlink(df_s5, df_meta_for_xy, t, **kwargs):
+    return grid_rain_15min_rainlink_ok(
+        df_s5=df_s5, df_meta_for_xy=df_meta_for_xy, times_sel=[t], **kwargs
+    )

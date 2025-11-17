@@ -424,7 +424,7 @@ cfg_wa = WAConfigV2(
 df_attn = apply_wet_antenna_decay(df_s12, cfg_wa)
 df_attn = _utcify_index(df_attn)
 print("Step 2c (WA V2) done. Columns:", df_attn.columns.tolist())
-# %%
+# # %%
 # =============================
 # Step 3: k–α (γ → R, gated)
 # =============================
@@ -505,7 +505,6 @@ def plot_rainrate(df_s5, link_id, t0=None, t1=None):
 
 # Example QA for first link
 plot_rainrate(df_s5, df_sum.loc[0, "ID"], t0="2025-06-12", t1="2025-06-14")
-
 # %%
 # =========================
 # Gridding: OK → IDW combo
@@ -606,18 +605,27 @@ meta_xy = (
     .drop_duplicates("ID")
 )
 
-R1, d1 = s6pcm.grid_rain_at_time(
-    df_s5=df_s5[["ID","R_mm_per_h"]],
+R1, d1 = s6pcm.grid_rain_at_time_rainlink(
+    df_s5=df_s5[["ID", "R_mm_per_h"]],
     df_meta_for_xy=meta_xy,
-    t=t,
-    grid_res_deg=0.03, domain_pad_deg=0.2,
-    drizzle_to_zero=0.30,
-    idw_power=2.0,
-    idw_nnear=15,
-    idw_maxdist_km=30.0,
-    max_dist_km_mask=35.0,
-    smooth_kernel_px=3,
-    n_jobs=15,
+    t=t,                      # naive UTC timestamp present in df_s5.index
+
+    # RainLINK-OK parameters:
+    grid_res_deg=0.03,
+    domain_pad_deg=0.20,
+    wet_thr=0.15,
+    dry_thr=0.15,
+    ok_model="exponential",
+    ok_range_km=25.0,
+    ok_nugget_frac=0.4,
+    min_pts_ok=4,
+    support_k=2,
+    support_radius_km=25.0,
+    drizzle_to_zero=0.05,     # you can change from default 0.10 if you like
+    n_jobs=5,                 # or >1 if you want parallel
+    parallel_backend_name="processes",
+    outside_support_fill=np.nan,
+    insufficient_training_fill=np.nan,
 )
 
 print(d1)
@@ -639,7 +647,7 @@ from pipeline_modes import save_each_time_to_netcdf
 
 out_paths = save_each_time_to_netcdf(
     R_da,
-    out_dir="/home/kkumah/Projects/cml-stuff/out_cml_rain_dir",
+    out_dir="/home/kkumah/Projects/cml-stuff/out_cml_rain_dir_2025-11-17",
     base_name="ghana_cml_R_consensus",
     engine="netcdf4",
     complevel=5,
