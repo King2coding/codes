@@ -17,7 +17,7 @@ from rioxarray.merge import merge_arrays
 
 #%%
 # define paths
-PATH_CML_RAIN = r'/home/kkumah/Projects/cml-stuff/out_cml_rain_dir_2025-11-17'
+PATH_CML_RAIN = r'/home/kkumah/Projects/cml-stuff/out_cml_rain_dir'
 PATH_MSG_BT = r'/home/kkumah/Projects/cml-stuff/satellite_data/msg/run_20251027_201416'
 PATH_MSG_CLM = r'/home/kkumah/Projects/cml-stuff/satellite_data/msg_clm/run_20251027_201601'
 
@@ -515,7 +515,7 @@ def train_quantile(alpha, dtrain, num_boost_round=600, seed=150):
     }
     return xgb.train(params, dtrain, num_boost_round=num_boost_round)
 
-qs_dense = np.linspace(0, 1, 34)[1:-1]  #np.linspace(0.05, 0.95, 19)             # 5–95% every 5%
+qs_dense = np.linspace(0.05, 0.95, 19)#np.linspace(0, 1, 34)[1:-1]  #             # 5–95% every 5%
 boosters_by_q = {q: train_quantile(q, d70_all) for q in qs_dense}
 # --- Refit quantiles on WET-ONLY samples in log1p space ---
 # thr_wet   = 0.02
@@ -560,7 +560,7 @@ boosters_by_q = {q: train_quantile(q, d70_all) for q in qs_dense}
 
 # q_list = [0.70, 0.75, 0.80]
 # boosters_by_q = {q: train_quantile(q, d70_reg) for q in q_list}
-
+#%%
 # Helpers for patch correction (relaxed) & smoothing
 import numpy as np
 import pandas as pd
@@ -752,6 +752,113 @@ def predict_slice_meanq(time_val, win_smooth=3, apply_patch=True,
     rain_smooth = smooth_da_mean(rain_map_cor, win=win_smooth)
     return rain_smooth, rain_map
 
+from quantnn.quantiles import posterior_mean, posterior_quantiles
+
+def predict_slice_denseq_with_patch(
+    time_val,
+    mode="highq",          # "highq" or "median"
+    win_smooth=3,
+    drizzle_floor=0.10,
+    apply_patch=True,
+    highq_range=(0.70, 0.80),  # range for high-q mean
+):
+    """
+    mode = "highq"  → mean over qs_dense in [0.70, 0.80]
+    mode = "median" → posterior median via posterior_quantiles
+    Returns: (rain_corr, rain_raw)
+    """
+    # --- gather features ---
+    b1 = BT_IR108.sel(time=time_val).where(mask_cloud.sel(time=time_val))
+    b2 = BT_IR120.sel(time=time_val).where(mask_cloud.sel(time=time_val))
+    b3 = BT_WV062.sel(time=time_val).where(mask_cloud.sel(time=time_val))
+    bd = BT_diff .sel(time=time_val).where(mask_cloud.sel(time=time_val))
+    valid = np.isfinite(b1) & np.isfinite(b2) & np.isfinite(b3) & np.isfinite(bd)
+
+    if valid.sum().item() == 0:
+        out = xr.zeros_like(b1).fillna(0.0)
+        out.name = "R_pred_mm_per_h"
+        return out, out
+
+    X_t = np.column_stack([
+        b1.values[valid], b2.values[valid],
+        b3.values[valid], bd.values[valid]
+    ]).astype("float32")
+    dX = xgb.DMatrix(X_t, feature_names=feat_names, nthread=12)
+
+    # --- dense quantile predictions in log1p space, then invert ---
+    pred_list = [invf(boosters_by_q[q].predict(dX)) for q in qs_dense]
+    Yq = np.column_stack(pred_list).astype("float32")   # (Nvalid, n_q)
+    Yq = np.maximum.accumulate(Yq, axis=1)              # enforce monotone
+
+    # --- aggregation: HIGH-Q MEAN or POSTERIOR MEDIAN ---
+    if mode == "highq":
+        qmin, qmax = highq_range
+        mask_q = (qs_dense >= qmin) & (qs_dense <= qmax)
+        if mask_q.sum() == 0:
+            raise ValueError(f"No qs_dense within {highq_range}, got {qs_dense}")
+        r_flat = Yq[:, mask_q].mean(axis=1).astype("float32")
+
+    elif mode == "median":
+        # directly compute posterior median (q=0.5)
+        med = posterior_quantiles(
+            y_pred=Yq,
+            quantiles=qs_dense,
+            new_quantiles=[0.5]
+        )
+        # posterior_quantiles returns shape (Nvalid, 1)
+        r_flat = med[:, 0].astype("float32")
+
+    else:
+        raise ValueError(f"Unknown mode={mode!r}. Use 'highq' or 'median'.")
+
+    # --- rebuild 2D field ---
+    rain_map = xr.full_like(b1, np.nan, dtype="float32")
+    rain_map.values[valid] = np.clip(r_flat, 0.0, None)
+    rain_map = rain_map.fillna(0.0)
+    rain_map.name = "R_pred_mm_per_h"
+    rain_map.attrs["long_name"] = f"Rainfall ({mode} aggregation)"
+    rain_map.attrs["units"] = "mm h-1"
+
+    # drizzle filter
+    if drizzle_floor is not None:
+        rain_map.values = np.where(rain_map.values < drizzle_floor, 0.0, rain_map.values)
+
+    # smoothing (mean in a local neighborhood)
+    if win_smooth and win_smooth > 1:
+        rain_map = smooth_da_mean(rain_map, win=win_smooth)
+
+    rain_raw = rain_map.copy()  # BEFORE patch correction
+
+    # --- IR-based patch correction ---
+    if apply_patch:
+        meta = xarray_meta_from_da(b1)
+        wet_grid = (rain_map.values >= drizzle_floor).astype(np.int16)
+        bt_array = b1.values.astype("float32")
+
+        corr_wet = correct_wet_dry(
+            wet_grid, bt_array, meta,
+            k_std=0.5,
+            p_low=0.30,
+            abs_bt_max=270.0,
+            min_patch_px=12,
+            morph_open=True
+        )
+
+        rain_corr = rain_map.where(corr_wet == 1, 0.0)
+    else:
+        rain_corr = rain_map
+
+    # optional additional smoothing of corrected field
+    if win_smooth and win_smooth > 1:
+        rain_corr = smooth_da_mean(rain_corr, win=win_smooth)
+
+    rain_corr.name = "R_pred_mm_per_h"
+    rain_corr.attrs["long_name"] = (
+        f"Rainfall ({mode} aggregation, IR108 patch-corrected, smoothed)"
+    )
+    rain_corr.attrs["units"] = "mm h-1"
+
+    return rain_corr, rain_raw
 
 def predict_slice_with_correction(time_val, drizzle_floor=0.10, smooth_size=3):
     # === gather features & mask ===
@@ -815,11 +922,31 @@ def predict_slice_with_correction(time_val, drizzle_floor=0.10, smooth_size=3):
     return rain_corr, rain_map
 
 # Run over held-out 30% times
-pred_pairs = [predict_slice_meanq(t, win_smooth=3, apply_patch=True) for t in times_30]
-R_pred_30_corr        = xr.concat([p[0] for p in pred_pairs], dim="time").transpose("time","y","x")
-R_pred_30_uncorrected = xr.concat([p[1] for p in pred_pairs], dim="time").transpose("time","y","x")
-R_pred_30_corr["time"]        = times_30
-R_pred_30_uncorrected["time"] = times_30
+# pred_pairs = [predict_slice_meanq(t, win_smooth=3, apply_patch=True) for t in times_30]
+# R_pred_30_corr        = xr.concat([p[0] for p in pred_pairs], dim="time").transpose("time","y","x")
+# R_pred_30_uncorrected = xr.concat([p[1] for p in pred_pairs], dim="time").transpose("time","y","x")
+# R_pred_30_corr["time"]        = times_30
+# R_pred_30_uncorrected["time"] = times_30
+
+# --- high-q mean version ---
+pairs_highq = [
+    predict_slice_denseq_with_patch(t, mode="highq", win_smooth=3, drizzle_floor=0.10, apply_patch=True)
+    for t in times_30
+]
+R_highq_corr = xr.concat([p[0] for p in pairs_highq], dim="time").transpose("time", "y", "x")
+R_highq_raw  = xr.concat([p[1] for p in pairs_highq], dim="time").transpose("time", "y", "x")
+R_highq_corr["time"] = times_30
+R_highq_raw["time"]  = times_30
+
+# --- posterior median version ---
+pairs_med = [
+    predict_slice_denseq_with_patch(t, mode="median", win_smooth=3, drizzle_floor=0.10, apply_patch=True)
+    for t in times_30
+]
+R_med_corr = xr.concat([p[0] for p in pairs_med], dim="time").transpose("time", "y", "x")
+R_med_raw  = xr.concat([p[1] for p in pairs_med], dim="time").transpose("time", "y", "x")
+R_med_corr["time"] = times_30
+R_med_raw["time"]  = times_30
 
 # pred_maps_corr = [predict_slice_with_correction(t, drizzle_floor=0.10, smooth_size=3) for t in times_30]
 # R_pred_30_corr        = xr.concat([p[0] for p in pred_maps_corr], dim="time").transpose("time","y","x")
@@ -892,11 +1019,11 @@ ax_clm    = fig.add_subplot(gs[1, 1], projection=proj)
 fig.add_subplot(gs[1, 2]).axis("off")
 
 # --- Top row: rain maps (discrete colorbar) ---
-im0 = R_pred_30_corr.sel(time=t0).plot(
+im0 = R_highq_corr.sel(time=t0).plot(
     ax=ax_pred, transform=proj, cmap=rain_cmap, norm=rain_norm, add_colorbar=False
 )
 add_geo(ax_pred)
-ax_pred.set_title(f"Predicted rain (mean q70/75/80, smoothed)\n{t0_str}")
+ax_pred.set_title(f"Predicted rain (smoothed)\n{t0_str}")
 cb0 = fig.colorbar(im0, ax=ax_pred, ticks=rain_ticks, fraction=0.046, pad=0.04)
 cb0.set_label("mm h$^{-1}$")
 
@@ -908,7 +1035,7 @@ ax_cml.set_title("CML rain")
 cb1 = fig.colorbar(im1, ax=ax_cml, ticks=rain_ticks, fraction=0.046, pad=0.04)
 cb1.set_label("mm h$^{-1}$")
 
-im2 = R_pred_30_uncorrected.sel(time=t0).plot(
+im2 = R_highq_raw.sel(time=t0).plot(
     ax=ax_uncorr, transform=proj, cmap=rain_cmap, norm=rain_norm, add_colorbar=False
 )
 add_geo(ax_uncorr)
