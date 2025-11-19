@@ -99,7 +99,7 @@ importlib.reload(s1b)
 df_nla, s1_sum = s1.wetdry_classify_with_mode(
     _utcify_index(df_clean),
     mode=WETDRY_MODE,
-    override={"n_jobs": 12},
+    override={"n_jobs": 15},
 )
 df_nla = _utcify_index(df_nla)
 print("Step 1 (Δ-based NLA) done. Columns:", df_nla.columns.tolist())
@@ -116,7 +116,7 @@ from step2_baseline_dry48 import compute_dry_baseline_48h, Baseline48Config
 cfg2 = Baseline48Config(
     window_hours=48,
     fallback_hours=72,
-    min_dry_samples=8,          # or 12, if you prefer stricter baseline
+    min_dry_samples=12,          # or 12, if you prefer stricter baseline
     smooth_baseline_samples=0,
 )
 
@@ -130,7 +130,7 @@ print(s2_sum.head())
 df_ex, s1b_sum = s1b.wetdry_from_excess_with_mode(
     df_step2,
     mode=WETDRY_MODE,
-    override={"n_jobs": 12},
+    override={"n_jobs": 15},
 )
 df_ex = _utcify_index(df_ex)
 print("Step 1b (excess NLA) done. Columns:", df_ex.columns.tolist())
@@ -205,7 +205,7 @@ else:
         nb_col=nb_col,
         wet_col="is_wet_final",
         max_nb_for_rescue=2,
-        gamma_thr_db_per_km=0.03,
+        gamma_thr_db_per_km=0.01,
         min_run_bins=2,
         require_network_anchor=True,
         min_network_wet_frac=0.05,
@@ -253,7 +253,7 @@ sl_cfg = SingleLinkConfig(
     gamma_col=gamma_col,
     nb_col=nb_col,
     wet_col="is_wet_final",
-    thr_db_per_km=0.05,     # <<< Option B
+    thr_db_per_km=0.02,     # <<< Option B
     min_run_bins=2,
     max_nb_for_fallback=2,
 )
@@ -379,7 +379,7 @@ if changed_ids:
     plt.suptitle(f"Temporal rescue sanity — link {link_id} on 2025-06-19")
     plt.tight_layout()
     plt.show()
-else:
+else: 
     print("No links with changed wet/dry flags on 2025-06-19.")
 
 # %%

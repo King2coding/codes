@@ -373,7 +373,7 @@ y_30 = tgt_s   .isel(sample=idx30).values.astype("float32")
 
 print("Shapes → X_70:", X_70.shape, "y_70:", y_70.shape, "| X_30:", X_30.shape, "y_30:", y_30.shape)
 
-# --------------------
+# %%--------------------
 # 4) Inner split INSIDE 70% (for early-stopping selection)
 # --------------------
 times_70 = times_s[idx70]
@@ -511,7 +511,7 @@ def train_quantile(alpha, dtrain, num_boost_round=600, seed=150):
         "subsample": 0.8,
         "colsample_bytree": 0.9,
         "seed": seed,
-        "nthread": 12,
+        "nthread": 18,
     }
     return xgb.train(params, dtrain, num_boost_round=num_boost_round)
 
@@ -835,14 +835,16 @@ def predict_slice_denseq_with_patch(
         wet_grid = (rain_map.values >= drizzle_floor).astype(np.int16)
         bt_array = b1.values.astype("float32")
 
-        corr_wet = correct_wet_dry(
-            wet_grid, bt_array, meta,
-            k_std=0.5,
-            p_low=0.30,
-            abs_bt_max=270.0,
-            min_patch_px=12,
-            morph_open=True
-        )
+        # corr_wet = correct_wet_dry(
+        #     wet_grid, bt_array, meta,
+        #     k_std=0.5,
+        #     p_low=0.30,
+        #     abs_bt_max=270.0,
+        #     min_patch_px=12,
+        #     morph_open=True
+        # )
+
+        corr_wet = correct_wet_mask(wet_grid, b1.values.astype("float32"), meta)
 
         rain_corr = rain_map.where(corr_wet == 1, 0.0)
     else:
@@ -922,11 +924,11 @@ def predict_slice_with_correction(time_val, drizzle_floor=0.10, smooth_size=3):
     return rain_corr, rain_map
 
 # Run over held-out 30% times
-# pred_pairs = [predict_slice_meanq(t, win_smooth=3, apply_patch=True) for t in times_30]
-# R_pred_30_corr        = xr.concat([p[0] for p in pred_pairs], dim="time").transpose("time","y","x")
-# R_pred_30_uncorrected = xr.concat([p[1] for p in pred_pairs], dim="time").transpose("time","y","x")
-# R_pred_30_corr["time"]        = times_30
-# R_pred_30_uncorrected["time"] = times_30
+pred_pairs = [predict_slice_meanq(t, win_smooth=3, apply_patch=True) for t in times_30]
+R_pred_30_corr        = xr.concat([p[0] for p in pred_pairs], dim="time").transpose("time","y","x")
+R_pred_30_uncorrected = xr.concat([p[1] for p in pred_pairs], dim="time").transpose("time","y","x")
+R_pred_30_corr["time"]        = times_30
+R_pred_30_uncorrected["time"] = times_30
 
 # --- high-q mean version ---
 pairs_highq = [
@@ -965,17 +967,29 @@ import cartopy.crs as ccrs
 import cartopy.feature as cfeature
 from matplotlib.gridspec import GridSpec
 
-vmin_r, vmax_r = 0.0, 5.0
 
-n_colors = 21
-rain_bounds = np.linspace(vmin_r, vmax_r, n_colors)
-rain_norm   = mcolors.BoundaryNorm(rain_bounds, ncolors=256)
-rain_cmap   = plt.get_cmap("turbo")
-rain_ticks  = np.round(rain_bounds[::2], 1)
 
 # --- Choose a time slice ---
-t0 = times_30[92]
+# np.datetime64('2025-06-18T03:30:00.000000000')
+t0 = np.datetime64('2025-06-18T03:30:00.000000000')#times_30[92]
 t0_str = np.datetime_as_string(t0, unit='m')
+
+pairs_med = [
+    predict_slice_denseq_with_patch(t0, mode="median", win_smooth=3, drizzle_floor=0.05, apply_patch=True)
+]
+R_med_corr = pairs_med[0][0].transpose("y", "x")
+R_med_raw  = pairs_med[0][1].transpose("y", "x")
+R_med_corr["time"] = t0
+R_med_raw["time"]  = t0
+
+pairs_highq = [
+    predict_slice_denseq_with_patch(t0, mode="highq", win_smooth=3, drizzle_floor=0.10, apply_patch=True)
+]
+R_highq_corr = pairs_highq[0][0].transpose("y", "x")
+R_highq_raw  = pairs_highq[0][1].transpose("y", "x")
+R_highq_corr["time"] = t0
+R_highq_raw["time"]  = t0
+
 
 # --- Pull inputs for t0 (only IR108 and CLM as requested) ---
 bt108 = BT_IR108.sel(time=t0).where(mask_cloud.sel(time=t0))
@@ -1005,6 +1019,13 @@ def add_geo(ax):
     gl.ylocator = plt.MultipleLocator(1.0)
 
 # --- Figure layout: 3 panels on top, 2 panels bottom ---
+vmin_r, vmax_r = 0.0, 10
+n_colors = 21
+rain_bounds = np.linspace(vmin_r, vmax_r, n_colors)
+rain_norm   = mcolors.BoundaryNorm(rain_bounds, ncolors=256)
+rain_cmap   = plt.get_cmap("turbo")
+rain_ticks  = np.round(rain_bounds[::2], 1)
+
 fig = plt.figure(figsize=(18, 9), constrained_layout=True)
 gs  = GridSpec(2, 3, figure=fig, height_ratios=[1, 1])
 
@@ -1019,7 +1040,11 @@ ax_clm    = fig.add_subplot(gs[1, 1], projection=proj)
 fig.add_subplot(gs[1, 2]).axis("off")
 
 # --- Top row: rain maps (discrete colorbar) ---
-im0 = R_highq_corr.sel(time=t0).plot(
+# R_pred_30_corr
+# im0 = R_med_corr.sel(time=t0).plot(
+#     ax=ax_pred, transform=proj, cmap=rain_cmap, norm=rain_norm, add_colorbar=False
+# )
+im0 = R_highq_corr.plot(
     ax=ax_pred, transform=proj, cmap=rain_cmap, norm=rain_norm, add_colorbar=False
 )
 add_geo(ax_pred)
@@ -1034,8 +1059,11 @@ add_geo(ax_cml)
 ax_cml.set_title("CML rain")
 cb1 = fig.colorbar(im1, ax=ax_cml, ticks=rain_ticks, fraction=0.046, pad=0.04)
 cb1.set_label("mm h$^{-1}$")
-
-im2 = R_highq_raw.sel(time=t0).plot(
+# R_pred_30_uncorrected
+# im2 = R_med_raw.sel(time=t0).plot(
+#     ax=ax_uncorr, transform=proj, cmap=rain_cmap, norm=rain_norm, add_colorbar=False
+# )
+im2 = R_highq_raw.plot(
     ax=ax_uncorr, transform=proj, cmap=rain_cmap, norm=rain_norm, add_colorbar=False
 )
 add_geo(ax_uncorr)
