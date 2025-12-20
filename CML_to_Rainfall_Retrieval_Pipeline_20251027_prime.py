@@ -11,8 +11,8 @@ from persist_utils import save_r0_outputs
 
 # 0) Load your linked dataframe (must contain ID, DateTime, Pmin, Pmax)
 # out_fname = os.path.join(path_to_put_output, f'Multi-Link-Multi-Timestamp_coupled_linkdata_kkk_{cde_run_dte}.csv')
-df_raw = pd.read_csv(r'/home/kkumah/Projects/cml-stuff/data-cml/outs/Multi-Link-Multi-Timestamp_coupled_linkdata_kkk_20250929.csv')  # or CSV
-# path_to_put_output = r'/home/kkumah/Projects/cml-stuff/data-cml/outs'
+# df_raw = pd.read_csv(r'/home/kkumah/Projects/cml-stuff/data-cml/outs/Multi-Link-Multi-Timestamp_coupled_linkdata_kkk_20250929.csv')  # or CSV
+df_raw = pd.read_csv(r'/home/kkumah/Projects/cml-stuff/data-cml/outs/Multi-Link-Multi-Timestamp_coupled_linkdata_kkk_20251006.csv')  # or CSV
 path_to_put_output = r'/home/kkumah/Projects/cml-stuff/data-cml/outs'
 
 # 1) Run R0 cleaner (with the new defaults)
@@ -162,44 +162,63 @@ def apply_support_mask(Res, df_s5, meta_xy, t=None, *, k=3, km=35.0, eps=0.1, na
 
 
 R_da_rl, diag_rl = s6pcm.grid_rain_15min_rainlink_ok(
-    df_s5, meta_xy_grid,
-    grid_res_deg=0.03, domain_pad_deg=0.20,
-    wet_thr=0.8, dry_thr=0.05,
-    ok_model="exponential", ok_range_km=25.0, ok_nugget_frac=0.45,
-    min_pts_ok=15, support_k=3, support_radius_km=25.0,
+    df_s5, 
+    meta_xy_grid,
+    grid_res_deg=0.03, 
+    domain_pad_deg=0.20,
+    wet_thr=0.8, 
+    dry_thr=0.05,
+    ok_model="exponential", 
+    ok_range_km=25.0, 
+    ok_nugget_frac=0.45,
+    min_pts_ok=15, 
+    support_k=3, 
+    support_radius_km=25.0,
     drizzle_to_zero=0.15,
-    n_jobs=15, parallel_backend_name="processes",
+    n_jobs=20, 
+    parallel_backend_name="processes",
 )
 print(diag_rl)
 
-# R_da_rl, diag_rl = s6pcm.grid_rain_15min_rainlink_ok(
-#     df_s5, meta_xy_grid,
-#     grid_res_deg=0.03, domain_pad_deg=0.20,
-#     wet_thr=0.8, dry_thr=0.015,
-#     ok_model="exponential", ok_range_km=25.0, ok_nugget_frac=0.45,
-#     min_pts_ok=15, support_k=3, support_radius_km=25.0,
-#     drizzle_to_zero=0.15,
-#     n_jobs=20, parallel_backend_name="processes",
-# )
-# print(diag_rl)
+#%%
+t = pd.Timestamp("2025-06-19 16:15:00")
 
-# ok_times = [pd.Timestamp(t) for t in diag_rl.get("ok_times", [])]
-# t_plot = ok_times[0] if ok_times else pd.Timestamp(diag_rl["times_used"][0])
+meta_xy = (
+    df_clean.reset_index()[["ID","XStart","YStart","XEnd","YEnd"]]
+    .drop_duplicates("ID")
+)
 
-# # compute max rain for every OK time and pick the peak
-# mx = []
-# for t in R_da_rl["time"].values:
-#     a = R_da_rl.sel(time=np.datetime64(t), method="nearest").values
-#     mx.append(np.nanmax(a))
-# t_peak = ok_times[int(np.nanargmax(mx))]
+R1, d1 = s6pcm.grid_rain_at_time_rainlink(
+    df_s5=df_s5[["ID", "R_mm_per_h"]],
+    df_meta_for_xy=meta_xy,
+    t=t,                      # naive UTC timestamp present in df_s5.index
 
-# t_plot = pd.Timestamp(R_da_rl["time"][int(np.nanargmax(mx))].values)#t_peak, '2025-06-19 16:15:00'
+    # RainLINK-OK parameters:
+    grid_res_deg=0.03,
+    domain_pad_deg=0.20,
+    wet_thr=1.0,
+    dry_thr=0.0,
+    ok_model="exponential",
+    ok_range_km=25.0,
+    ok_nugget_frac=0.45,
+    min_pts_ok=15,
+    support_k=3,
+    support_radius_km=25.0,
+    drizzle_to_zero=0.5,     # you can change from default 0.10 if you like
+    n_jobs=20,                 # or >1 if you want parallel
+    parallel_backend_name="processes",
+    outside_support_fill=np.nan,
+    insufficient_training_fill=np.nan,
+)
+
+print(d1)
+#-----------------------------------------
 
 plot_slice_cartopy_with_links(
-    R_da_rl,
+    R1,
     meta_xy_grid,
     t='2025-06-19 15:00:00', #t_plot,
-    vmin=0.0, vmax=8.0, nbins=16,
+    vmin=0.0, vmax=15.0, nbins=16,
     extent=(-3.25, 1.2, 4.8, 11.15),
     cmap_name="Blues",
     # optional niceties:
