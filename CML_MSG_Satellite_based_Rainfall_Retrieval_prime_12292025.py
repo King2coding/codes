@@ -21,9 +21,10 @@ from rioxarray.merge import merge_arrays
 PATH_CML_RAIN = r'/home/kkumah/Projects/cml-stuff/out_cml_rain_dir'
 # r'/home/kkumah/Projects/cml-stuff/out_cml_rain_dir_2025-11-17'
 # 
-PATH_MSG_BT = r'/home/kkumah/Projects/cml-stuff/satellite_data/msg/run_20251027_201416'
-PATH_MSG_CLM = r'/home/kkumah/Projects/cml-stuff/satellite_data/msg_clm/run_20251027_201601'
-
+PATH_MSG_BT = r'/home/kkumah/Projects/cml-stuff/satellite_data/msg'
+# r'/home/kkumah/Projects/cml-stuff/satellite_data/msg/run_20251027_201416'
+PATH_MSG_CLM = r'/home/kkumah/Projects/cml-stuff/satellite_data/msg_clm'
+# r'/home/kkumah/Projects/cml-stuff/satellite_data/msg_clm/run_20251027_201601'
 #%% Constants
 # Which MSG vars to resample (present in your examples)
 BT_VARS = ['BT_IR108', 'BT_IR120', 'BT_WV062']   # linear interp
@@ -249,7 +250,7 @@ msg_clm = msg_clm.sel(time=common_times)
 
 
 # --- 6) Clip CML to Ghana bbox ---
-bbox = (-4.0, 1.5, 4.5, 11.5)
+bbox = (-4.0, 1.25, 4.5, 11.25)
 cml = cml.sel(lat=slice(bbox[1], bbox[3]), lon=slice(bbox[0], bbox[2]))
 
 # --- 7) Attach CRS and warp MSG to lat/lon ---
