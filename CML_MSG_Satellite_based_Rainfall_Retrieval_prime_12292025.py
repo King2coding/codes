@@ -190,17 +190,30 @@ msg_clm = msg_clm.sel(time=common_times)
 
 # --- 5) Clip CML to Ghana bbox ---
 bbox = (-4.0, 1.25, 4.5, 11.25)
-cml = cml.sel(lat=slice(bbox[1], bbox[3]), lon=slice(bbox[0], bbox[2]))
+cml = cml.sel(lat=slice(bbox[1], bbox[3]), 
+              lon=slice(bbox[0], bbox[2]))
 
 # --- 6) Attach CRS and warp MSG to lat/lon ---
 # (Do this once per MSG dataset)
 # Assign geostationary CRS (CF standard)
-msg_bt = msg_bt.rio.write_crs("+proj=geos +lon_0=0 +h=35785831 +a=6378137 +b=6356752.31414 +sweep=x +no_defs", inplace=False)
-msg_clm = msg_clm.rio.write_crs("+proj=geos +lon_0=0 +h=35785831 +a=6378137 +b=6356752.31414 +sweep=x +no_defs", inplace=False)
+msg_bt = msg_bt.rio.write_crs(
+                            "+proj=geos +lon_0=0 +h=35785831 +a=6378137 +b=6356752.31414 +sweep=x +no_defs", 
+                            inplace=False
+                            )
+msg_clm = msg_clm.rio.write_crs(
+                            "+proj=geos +lon_0=0 +h=35785831 +a=6378137 +b=6356752.31414 +sweep=x +no_defs", 
+                            inplace=False
+                            )
 
 # Reproject both to EPSG:4326 (lat/lon)
-msg_bt_ll  = msg_bt.rio.reproject("EPSG:4326", resampling=Resampling.nearest)
-msg_clm_ll = msg_clm.rio.reproject("EPSG:4326", resampling=Resampling.mode)
+msg_bt_ll  = msg_bt.rio.reproject(
+             "EPSG:4326", 
+             resampling=Resampling.nearest
+             )
+msg_clm_ll = msg_clm.rio.reproject(
+             "EPSG:4326", 
+             resampling=Resampling.mode
+             )
 
 # --- 7) Clip warped MSG to Ghana bbox too ---
 msg_bt_ll  = msg_bt_ll.sel(x=slice(bbox[0], bbox[1]), y=slice(bbox[3], bbox[2]))
