@@ -547,7 +547,9 @@ meta = {
 joblib.dump(meta, model_path.replace(".pkl", "_meta.pkl"))
 
 # load model later
-boosters_by_q = joblib.load(model_path.replace(".pkl", "_meta.pkl"))
+boosters_by_q = joblib.load(os.path.join(
+    path_loc,'xgb_quantile_models_ghana_70pct_20251220.pkl'))
+
 meta = joblib.load(model_path.replace(".pkl", "_meta.pkl"))
 qs_dense = meta["qs_dense"]
 # --- Refit quantiles on WET-ONLY samples in log1p space ---
@@ -714,7 +716,7 @@ def correct_wet_mask(bin_rast, bt_rast, meta, use_std=False, k_std=2.0):
     mean_r = rasterize_me(meta, gdf, "mean"); std_r = rasterize_me(meta, gdf, "std")
     # choose threshold: mean only (old) or mean + k_std*std
     if use_std:
-        thr = mean_r + k_std * std_r
+        thr = mean_r - (k_std * std_r)
     else:
         thr = mean_r
     keep = (bin_rast==1) & (bt_rast <= thr)
@@ -785,7 +787,7 @@ def predict_slice_meanq(time_val, win_smooth=2, apply_patch=True,
         wet_grid = (rain_map.values > 0).astype(np.int16)
         corr_wet = correct_wet_mask(wet_grid, 
                                     b1.values.astype("float32"), 
-                                    meta, use_std=False, k_std=kstd)
+                                    meta, use_std=True, k_std=kstd)
         
         rain_map_cor = rain_map_cor.where(corr_wet == 1, 0.0)
     # smoothing
@@ -1014,12 +1016,6 @@ from matplotlib.gridspec import GridSpec
 t0 = np.datetime64('2025-06-18T03:30:00.000000000')#times_30[92]
 t0_str = np.datetime_as_string(t0, unit='m')
 
-dte_t = [t for t in times_30 if pd.to_datetime(t).date().strftime('%Y-%m-%d')=='2025-06-18']
-
-pred_pairs = [predict_slice_meanq(t, win_smooth=3, apply_patch=True) for t in dte_t]
-R_pred_30_corr        = xr.concat([p[0] for p in pred_pairs], dim="time").transpose("time","y","x")
-R_pred_30_corr["time"]        = dte_t
-
 pairs_med = [
     predict_slice_denseq_with_patch(t0, mode="median", win_smooth=3, drizzle_floor=0.05, apply_patch=True)
 ]
@@ -1138,5 +1134,126 @@ im5 = clm.plot(
 add_geo(ax_clm)
 ax_clm.set_title("Cloud mask (0/1/2/3)")
 ax_clm.legend(handles=legend_handles, loc="lower left", frameon=True)
+
+plt.show()
+
+
+#%%
+# Daily analysis
+dte_t = [t for t in times_30 if pd.to_datetime(t).date().strftime('%Y-%m-%d')=='2025-06-18']
+
+pred_pairs = [predict_slice_meanq(t, win_smooth=3, apply_patch=True) for t in dte_t]
+R_pred_30_corr        = xr.concat([p[0] for p in pred_pairs], dim="time").transpose("time","y","x")
+R_pred_30_corr["time"]        = dte_t
+
+R_daily_mean = R_pred_30_corr.mean(dim='time') * 24
+R_daily_mean["time"] = pd.to_datetime(t0).date().strftime('%Y-%m-%d') 
+R_daily_mean.name = "R_daily_total_mm_per_day"
+R_daily_mean.attrs["units"] = "mm day-1"
+
+# plot using cartopy to show boundary
+import matplotlib.pyplot as plt
+import cartopy.crs as ccrs
+import cartopy.feature as cfeature
+from matplotlib.colors import BoundaryNorm
+from matplotlib.cm import ScalarMappable
+import numpy as np
+from matplotlib.colors import BoundaryNorm, ListedColormap
+import matplotlib.pyplot as plt
+import shapely.geometry as sgeom
+import shapely.vectorized as svec
+import numpy as np
+
+da = R_daily_mean  # your DataArray (y=lat, x=lon)
+da = da.sortby("y")  # safety: ensures south->north increasing
+daily_bins = np.arange(0,40,2)
+# [
+#     0,   1,   2,   5,   10,
+#     20,  30,  40
+# ]
+
+base_cmap = plt.cm.turbo   # or viridis, plasma, Spectral_r
+daily_cmap = ListedColormap(
+    base_cmap(np.linspace(0.05, 0.95, len(daily_bins) - 1))
+)
+
+daily_norm = BoundaryNorm(
+    boundaries=daily_bins,
+    ncolors=daily_cmap.N,
+    clip=True
+)
+
+import cartopy.io.shapereader as shpreader
+import shapely.geometry as sgeom
+
+shp = shpreader.natural_earth(
+    resolution="10m",
+    category="cultural",
+    name="admin_0_countries"
+)
+
+reader = shpreader.Reader(shp)
+ghana_geom = None
+for rec in reader.records():
+    if rec.attributes["NAME_LONG"] == "Ghana":
+        ghana_geom = rec.geometry
+        break
+
+# Ghana geometry is already loaded as ghana_geom (shapely)
+lon2d, lat2d = np.meshgrid(
+    R_daily_mean["x"].values,
+    R_daily_mean["y"].values
+)
+
+ghana_mask = svec.contains(ghana_geom, lon2d, lat2d)
+
+R_daily_ghana = R_daily_mean.where(ghana_mask)
+
+proj = ccrs.PlateCarree()
+fig = plt.figure(figsize=(8,8), dpi=150)
+ax = plt.axes(projection=proj)
+
+ax.set_extent([-3.5, 1.2, 4.5, 11.2], crs=proj)
+
+# ax.add_feature(cfeature.OCEAN.with_scale("10m"), facecolor="aqua")
+# ax.add_feature(cfeature.LAKES.with_scale("10m"), facecolor="aqua", edgecolor="none")
+ax.coastlines(resolution="10m", linewidth=1.0)
+ax.add_feature(cfeature.BORDERS.with_scale("10m"), linewidth=0.7, edgecolor="0.25")
+
+gl = ax.gridlines(draw_labels=True, linewidth=0.4, color="0.6", alpha=0.6, linestyle="--")
+gl.right_labels = False
+gl.top_labels = False
+
+# ensure y-axis is ordered correctly
+R_daily = R_daily_ghana.sortby("y")
+
+im = ax.pcolormesh(
+    R_daily["x"].values,
+    R_daily["y"].values,
+    R_daily.values,
+    cmap=daily_cmap,
+    norm=daily_norm,
+    transform=proj,
+    shading="auto"
+)
+
+# Ghana outline on top
+ax.add_geometries(
+    [ghana_geom],
+    crs=proj,
+    facecolor="none",
+    edgecolor="black",
+    linewidth=1.2,
+    zorder=3
+)
+
+add_geo(ax)
+ax.set_title(f"Daily total predicted rainfall\n{str(R_daily.time.values)}\n{alg}")
+
+cb = plt.colorbar(
+    im, ax=ax, ticks=daily_bins,
+    fraction=0.046, pad=0.04
+)
+cb.set_label("mm day$^{-1}$")
 
 plt.show()
