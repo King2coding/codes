@@ -352,6 +352,9 @@ def save_day_files(R15, Rd, day_str, alg="OrigV", producer="Kingsley Kumah"):
         "model_file": os.path.basename("xgb_quantile_models_ghana_oper_20251229.pkl"),
     }
     ds15.attrs.update(common_attrs)
+    ds15.attrs["n_time_steps"] = int(ds15.dims["time"])
+    ds15.attrs["expected_steps_per_day"] = 96
+    ds15.attrs["coverage_fraction"] = float(ds15.dims["time"] / 96)
     dsd.attrs.update(common_attrs)
 
     # filenames
@@ -399,7 +402,7 @@ for day in days:
         print("Skipping (no common times):", day_str)
         continue
 
-    min_frac = 0.70  # you choose
+    min_frac = 0.50  # you choose
     if cov["coverage_frac"] < min_frac:
         print(f"Skipping (low coverage {cov['coverage_frac']:.2%}):", day_str)
         continue
