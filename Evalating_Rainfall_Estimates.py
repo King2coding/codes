@@ -1,6 +1,8 @@
 #%% Package imports
 import gc
 import os
+import re
+
 import numpy as np
 import pandas as pd
 import xarray as xr
@@ -22,6 +24,8 @@ plot_dir = '/home/kkumah/Projects/cml-stuff/plots'
 
 #%% Floating varibales and constants
 all_imerg_files = sorted([os.path.join(imerg_dir, f) for f in os.listdir(imerg_dir) if f.endswith('.nc4')])
+
+all_cml_sat_files = sorted([os.path.join(cml_sat_daily_dir, f) for f in os.listdir(cml_sat_daily_dir) if f.endswith('.nc')])
 
 era5_file = os.path.join(era5_dir, 'ERA5_total_precipitation_2025_09_12_Ghana.nc')
 
@@ -306,7 +310,7 @@ def plot_precip_1x2_compare_ghana(
     # ------------------------------------------------------------
     proj = ccrs.PlateCarree()
     fig, axs = plt.subplots(
-        1, 2, figsize=(13, 6),
+        1, 3, figsize=(13, 6),
         subplot_kw=dict(projection=proj)
     )
 
@@ -375,7 +379,7 @@ def plot_precip_1x2_compare_ghana(
     cbar.set_ticks(ticks)
     cbar.set_ticklabels([str(t) for t in ticks])
     cbar.ax.tick_params(labelsize=13)
-    cbar.set_label("Rainfall (mm/day)", fontsize=15)
+    cbar.set_label("Rainfall [mm/day]", fontsize=15)
 
     # ------------------------------------------------------------
     # REDUCE WHITESPACE
@@ -391,15 +395,42 @@ def plot_precip_1x2_compare_ghana(
 
     return fig, axs
 
-import numpy as np
-import matplotlib.pyplot as plt
+
+def open_daily_with_time(fname):
+    """
+    Open a daily CML-SAT file that lacks a time dimension,
+    and inject time from filename.
+    """
+    # Extract YYYYMMDD from filename
+    m = re.search(r"(\d{8})", fname)
+    if m is None:
+        raise ValueError(f"Cannot extract date from {fname}")
+
+    date = pd.to_datetime(m.group(1), format="%Y%m%d")
+
+    ds = xr.open_dataset(fname)
+
+    # Ensure time dimension exists
+    if "time" not in ds.dims:
+        ds = ds.expand_dims(time=[date])
+
+    # CF-compliant attrs
+    ds["time"].attrs.update({
+        "standard_name": "time",
+        "long_name": "time",
+        "axis": "T"
+    })
+
+    return ds
+
 
 def plot_latitude_profiles(
     imerg_da,
     era5_da,
+    cml_sat_da,
     lat_name="latitude",
     xlim=None,
-    title="Latitudinal Mean Precipitation",
+    title="Latitudinal Mean Rainfall",
 ):
     """
     Plot IMERG and ERA5 precipitation profiles vs latitude.
@@ -409,33 +440,43 @@ def plot_latitude_profiles(
     lat = imerg_da[lat_name].values
     imerg_vals = imerg_da.values
     era5_vals = era5_da.values
+    cml_sat_vals = cml_sat_da.values
 
     # --- Ensure numpy arrays ---
     lat = np.asarray(lat)
     imerg_vals = np.asarray(imerg_vals)
     era5_vals = np.asarray(era5_vals)
+    cml_sat_vals = np.asarray(cml_sat_vals)
 
     # --- Sort by latitude (south → north for plotting clarity) ---
     sort_idx = np.argsort(lat)
     lat = lat[sort_idx]
     imerg_vals = imerg_vals[sort_idx]
     era5_vals = era5_vals[sort_idx]
+    cml_sat_vals = cml_sat_vals[sort_idx]
 
     # --- Plot ---
     fig, ax = plt.subplots(figsize=(6, 7), dpi=140)
 
     ax.plot(
         imerg_vals, lat,
-        color="tab:blue",
-        linewidth=2.5,
-        label="IMERG"
+        color="k",
+        linewidth=3.5,
+        label="IMERG",
     )
 
     ax.plot(
         era5_vals, lat,
-        color="tab:orange",
-        linewidth=2.5,
-        label="ERA5"
+        color="orange",
+        linewidth=3.5,
+        label="ERA5",
+    )
+
+    ax.plot(
+        cml_sat_vals, lat,
+        color="b",
+        linewidth=3.5,
+        label="CML-SAT",
     )
 
     # Agro-climatic zone boundaries (°N)
@@ -502,6 +543,8 @@ for day in days:
 
 imerg_daily_xarr = xr.concat(daily_xr, dim="time")
 
+
+
 # 2) Read and preprocess ERA5 data
 # era5_data = xr.open_dataset(era5_file)
 # era5_data = era5_data.rename({'valid_time': 'time'})
@@ -525,6 +568,21 @@ imerg_daily_agg = harmonize_to_era5(
     era5_daily_data,
 )
 
+# Read process cml data
+datasets = [open_daily_with_time(f) for f in all_cml_sat_files]
+
+cml_sat_xarr = xr.concat(
+    datasets,
+    dim="time",
+    coords="minimal",
+    compat="override"
+)
+
+cml_sat_daily_agg = harmonize_to_era5(
+    cml_sat_xarr['rain_daily_total'],
+    era5_daily_data,
+)
+
 # harmonize the data in time ensuring we are comparing same days
 # Convert ERA5 time to datetime64[ns]
 era5_daily_data = era5_daily_data.assign_coords(
@@ -536,35 +594,46 @@ imerg_daily_agg = imerg_daily_agg.assign_coords(
     time=pd.to_datetime(imerg_daily_agg.time.values).normalize()
 )
 
+# Normalize CML-Sat time (safe even if already normalized)
+cml_sat_daily_agg = cml_sat_daily_agg.assign_coords(
+    time=pd.to_datetime(cml_sat_daily_agg.time.values).normalize()
+)
 # Now intersect safely
 common_times = np.intersect1d(
-    imerg_daily_agg.time.values,
-    era5_daily_data.time.values
+    np.intersect1d(
+        imerg_daily_agg.time.values,
+        era5_daily_data.time.values
+    ),
+    cml_sat_daily_agg.time.values
 )
 
 # Subset
 imerg_daily_agg = imerg_daily_agg.sel(time=common_times)
 era5_daily_data = era5_daily_data.sel(time=common_times)
+cml_sat_daily_agg = cml_sat_daily_agg.sel(time=common_times)
 
 #%% Begin evaluation and plotting
 # 1) a) Spatial mean over Ghana: single value per day time series
 imerg_ghana_mean = imerg_daily_agg.mean(dim=['latitude', 'longitude'])
 era5_ghana_mean = era5_daily_data.mean(dim=['latitude', 'longitude'])
+cml_sat_ghana_mean = cml_sat_daily_agg.mean(dim=['latitude', 'longitude'])
 
 # b) Spatial mean: 2d array
 imerg_ghana_2dmean = imerg_daily_agg.mean(dim='time')
 era5_ghana_2dmean = era5_daily_data.mean(dim='time')
+cml_sat_ghana_2dmean = cml_sat_daily_agg.mean(dim='time')
 
 # c) zonal latitudinal mean
 imerg_ghana_zonalmean = imerg_daily_agg.mean(dim=['time', 'longitude'])
 era5_ghana_zonalmean = era5_daily_data.mean(dim=['time', 'longitude'])
-
+cml_sat_ghana_zonalmean = cml_sat_daily_agg.mean(dim=['time', 'longitude'])
 # ---------------------
 # Their plotting
 # ---------------------
 # 1) a) time series
 da1 = imerg_ghana_mean          # rename appropriately
 da2 = era5_ghana_mean           # rename appropriately
+da3 = cml_sat_ghana_mean      # rename appropriately
 
 fig, ax = plt.subplots(figsize=(10, 4), dpi=140)
 
@@ -573,21 +642,28 @@ ax.plot(
     da1.time.values,
     da1.values,
     label="IMERG",
-    color="tab:blue",
-    linewidth=1.8
+    color="k",
+    linewidth=3.5
 )
 
 ax.plot(
     da2.time.values,
     da2.values,
     label="ERA5",
-    color="tab:orange",
-    linewidth=1.8
+    color="orange",
+    linewidth=3.5
+)
+ax.plot(
+    da3.time.values,
+    da3.values,
+    label="CML-SAT",
+    color="blue",
+    linewidth=3.5
 )
 
 # --- Axis formatting ---
 # ax.set_xlabel("Time", fontsize=13)
-ax.set_ylabel("Rainfall (mm/day)", fontsize=13)
+ax.set_ylabel("Rainfall [mm/day]", fontsize=13)
 
 # Force identical y-ticks
 yticks = np.arange(0, 21, 5)
@@ -622,32 +698,80 @@ plt.setp(ax.get_xticklabels(), rotation=0, ha='center')
 
 plt.tight_layout()
 plt.show()
+gc.collect()
 
 # 2) b) Spatial mean maps
 fig, axs = plot_precip_1x2_compare_ghana(
-    da_list=[imerg_ghana_2dmean, era5_ghana_2dmean],
+    da_list=[imerg_ghana_2dmean, era5_ghana_2dmean, cml_sat_ghana_2dmean],
     lons=imerg_ghana_2dmean.longitude.values,
     lats=imerg_ghana_2dmean.latitude.values,
-    titles=["IMERG", "ERA5"],
+    titles=["IMERG", "ERA5", "CML-SAT"],
     vmin=0,
-    vmax=6
+    vmax=8
 )
+
+# 2) b) Spatial mean maps
+fig, axs = plot_precip_1x2_compare_ghana(
+    da_list=[imerg_daily_agg.sel(time='2025-09-20'), 
+             era5_daily_data.sel(time='2025-09-20'), 
+             cml_sat_daily_agg.sel(time='2025-09-20')],
+    lons=imerg_ghana_2dmean.longitude.values,
+    lats=imerg_ghana_2dmean.latitude.values,
+    titles=["IMERG", "ERA5", "CML-SAT"],
+    vmin=0,
+    vmax=18
+)
+
+gc.collect()
 
 # 2) c) Zonal mean plots
 plot_latitude_profiles(
     imerg_ghana_zonalmean,   # your IMERG 1D DataArray
     era5_ghana_zonalmean,    # your ERA5 1D DataArray
-    xlim=(0, 6),
-    title="Ghana Latitudinal Mean Precipitation"
+    cml_sat_ghana_zonalmean, # your CML-SAT 1D DataArray
+    xlim=(0, 8),
+    title="Latitudinal Mean Rainfall"
 )
+gc.collect()
 # %% 2) DO PDF ANALYSIS
 print("Creating Precipitation PDFs for GPCP v3.2, GPCP v3.3 and ERA5...")
-bins = [0.2 * (2 ** i) for i in range(10)]
+bins = [0.2 * (2 ** i) for i in range(11)]
 
 imerg_pdf = compute_pdf_elements_from_array(imerg_daily_agg.values, bins)
 era5_pdf = compute_pdf_elements_from_array(era5_daily_data.values, bins)
+cml_sat_pdf = compute_pdf_elements_from_array(cml_sat_daily_agg.values, bins)
+
+fnt_size = 13
+fg, axes = plt.subplots(figsize=(5, 5), sharey=True, constrained_layout=True)
+lw = 3.5
+# plot global pdfs
+axes.plot(bins,imerg_pdf['pdfv'], 
+             label='IMERG', lw=lw, c='k', ls='-')
+axes.plot(bins,era5_pdf['pdfv'], 
+             label='ERA5', lw=lw, c='orange', ls='-')
+axes.plot(bins,cml_sat_pdf['pdfv'], 
+             label='CML-SAT', lw=lw, c='b',ls='-')
+axes.set_xscale('log')
+
+axes.legend(fontsize=fnt_size, frameon=False, loc='best')
+
+axes.set_ylabel('PDFv', fontsize=fnt_size)
+
+axes.set_xlabel('Rainfall [mm/day]', fontsize=fnt_size)
 
 
+# a.grid(True, which='major', linestyle='--', linewidth=0.7, alpha=0.7)
+axes.minorticks_on()
+axes.tick_params(axis='both', which='major', length=7, width=1.2, labelsize=fnt_size)
+axes.tick_params(axis='both', which='minor', length=4, width=0.8)
+# Show only left and bottom axis
+axes.spines['top'].set_visible(False)
+axes.spines['right'].set_visible(False)
+axes.spines['left'].set_linewidth(1.2)
+axes.spines['bottom'].set_linewidth(1.2)
+
+plt.tight_layout()
+gc.collect()
 #%% 3) Do scatter plot analysis
 
 from sklearn.linear_model import LinearRegression
@@ -697,11 +821,18 @@ ylims = (0., 20)
 
 
 plots = [
-    (axs[0], imerg_ghana_mean, era5_ghana_mean, 'k', 'ERA5 vs IMERG', xlims, ylims),
-    (axs[1], era5_ghana_mean, imerg_ghana_mean, 'k', 'IMERG vs ERA5', xlims, ylims),
-    (axs[2], era5_ghana_mean, era5_ghana_mean, 'k', 'ERA5 vs ERA5', xlims, ylims) # (axs[1, 0], chgps_NH_means['zonal_means'], merra2_NH_means['zonal_means'], 'MERRA2', 'red', 'SH', SH_xlim, SH_ylim),
+    (axs[0], imerg_ghana_mean, cml_sat_ghana_mean, 'k', 'CML-SAT vs IMERG', xlims, ylims),
+    (axs[1], era5_ghana_mean, cml_sat_ghana_mean, 'k', 'CML-SAT vs ERA5', xlims, ylims),
+    (axs[2], era5_ghana_mean, imerg_ghana_mean, 'k', 'ERA5 vs IMERG', xlims, ylims) # (axs[1, 0], chgps_NH_means['zonal_means'], merra2_NH_means['zonal_means'], 'MERRA2', 'red', 'SH', SH_xlim, SH_ylim),
     
 ]
+
+# plots = [
+#     (axs[0], imerg_daily_agg.values.flatten(), cml_sat_daily_agg.values.flatten(), 'k', 'CML-SAT vs IMERG', xlims, ylims),
+#     (axs[1], era5_daily_data.values.flatten(), cml_sat_daily_agg.values.flatten(), 'k', 'CML-SAT vs ERA5', xlims, ylims),
+#     (axs[2], era5_daily_data.values.flatten(), imerg_daily_agg.values.flatten(), 'k', 'ERA5 vs IMERG', xlims, ylims) # (axs[1, 0], chgps_NH_means['zonal_means'], merra2_NH_means['zonal_means'], 'MERRA2', 'red', 'SH', SH_xlim, SH_ylim),
+    
+# ]
 
 for ax, x, y, color, lab, xlim, ylim in plots:
 
@@ -720,7 +851,7 @@ for ax, x, y, color, lab, xlim, ylim in plots:
 
     # 1:1 LINE across fixed limits
     ax.plot([xlim[0], xlim[1]], [ylim[0], ylim[1]],
-            color='black', linestyle='--', linewidth=1.5, label='1:1 Line')
+            color='black', linestyle='--', linewidth=1.5) # , label='1:1 Line'
 
     # Regression line
     slope, intercept, mask = add_regression_line(ax, x, y, color, xlim)
@@ -731,8 +862,8 @@ for ax, x, y, color, lab, xlim, ylim in plots:
     y = pd.to_numeric(y, errors='coerce')
 
     mask = np.isfinite(x) & np.isfinite(y)#~(x.isna() | y.isna())
-    x_clean = x[mask].astype(float).values
-    y_clean = y[mask].astype(float).values
+    x_clean = x[mask].astype(float)#.values
+    y_clean = y[mask].astype(float)#.values
 
     # Must be at least 2 values to compute correlation
     if len(x_clean) < 2:
@@ -745,12 +876,30 @@ for ax, x, y, color, lab, xlim, ylim in plots:
     eq_text = f"y = {slope:.2f}x + {intercept:.2f}"
 
     # Metrics block
-    ax.text(0.03, 0.97,
-            f"Corr = {corr:.2f}\nBias = {bias:.1%}\n{eq_text}",
-            transform=ax.transAxes,
-            fontsize=15, fontweight='bold',
-            va='top', ha='left',
-            bbox=dict(facecolor='white', alpha=0.65, edgecolor='none'))
+    metrics_text = (
+    f"Corr = {corr:.2f}\n"
+    f"Bias = {bias:.1%}\n"
+    f"{eq_text}\n"
+    "--  1:1 line\n"
+    "—   Regression line"
+    )
+
+    ax.text(
+        0.03, 0.97,
+        metrics_text,
+        transform=ax.transAxes,
+        fontsize=14,
+        fontweight='bold',
+        va='top', ha='left',
+        bbox=dict(facecolor='white', alpha=0.6, edgecolor='none')
+    )
+
+    # ax.text(0.03, 0.97,
+    #         f"Corr = {corr:.2f}\nBias = {bias:.1%}\n{eq_text}",
+    #         transform=ax.transAxes,
+    #         fontsize=15, fontweight='bold',
+    #         va='top', ha='left',
+    #         bbox=dict(facecolor='none', alpha=0.65, edgecolor='none'))
 
     # Axes + ticks
     ax.minorticks_on()
@@ -759,16 +908,247 @@ for ax, x, y, color, lab, xlim, ylim in plots:
     ax.grid(which='major', linestyle='--', linewidth=0.6, color='grey')
 
     # Legend
-    ax.legend(fontsize=12, loc='lower right')
+    # ax.legend(fontsize=12, loc='lower right', frameon=False)
 
 # Axis labels
-axs[0].set_ylabel("ERA5 (mm/day)", fontsize=16)
-axs[0].set_xlabel("IMERG (mm/day)", fontsize=16)
-axs[1].set_ylabel("IMERG (mm/day)", fontsize=16)
-axs[1].set_xlabel("ERA5 (mm/day)", fontsize=16)
-axs[2].set_ylabel("ERA5 (mm/day)", fontsize=16)
-axs[2].set_xlabel("ERA5 (mm/day)", fontsize=16)
+axs[0].set_ylabel("CML-SAT [mm/day]", fontsize=16)
+axs[0].set_xlabel("IMERG [mm/day]", fontsize=16)
+axs[1].set_ylabel("CML-SAT [mm/day]", fontsize=16)
+axs[1].set_xlabel("ERA5 [mm/day]", fontsize=16)
+axs[2].set_ylabel("IMERG [mm/day]", fontsize=16)
+axs[2].set_xlabel("ERA5 [mm/day]", fontsize=16)
 
 plt.tight_layout()
 plt.show()
 gc.collect()
+
+#%% Categorical metrics computation
+import numpy as np
+
+def categorical_stats(forecast, observation, threshold):
+    """
+    Compute categorical verification statistics following WMO/JWGNE definitions.
+
+    Parameters
+    ----------
+    forecast : array-like
+        Forecast values (e.g., rainfall mm/day)
+    observation : array-like
+        Observed values (same units as forecast)
+    threshold : float
+        Event threshold (e.g., rain >= 1 mm/day)
+
+    Returns
+    -------
+    stats : dict
+        Dictionary of categorical statistics
+    """
+
+    forecast = np.asarray(forecast)
+    observation = np.asarray(observation)
+
+    # Binary events
+    f_event = forecast >= threshold
+    o_event = observation >= threshold
+
+    # Contingency table
+    H = np.sum(f_event & o_event)        # Hits
+    M = np.sum(~f_event & o_event)       # Misses
+    F = np.sum(f_event & ~o_event)       # False alarms
+    C = np.sum(~f_event & ~o_event)      # Correct negatives
+
+    # Avoid division by zero using np.nan
+    POD = H / (H + M) if (H + M) > 0 else np.nan
+    FAR = F / (H + F) if (H + F) > 0 else np.nan
+    CSI = H / (H + M + F) if (H + M + F) > 0 else np.nan
+    Bias = (H + F) / (H + M) if (H + M) > 0 else np.nan
+    POFD = F / (F + C) if (F + C) > 0 else np.nan
+    Accuracy = (H + C) / (H + M + F + C) if (H + M + F + C) > 0 else np.nan
+
+    return {
+        "Hits": H,
+        "Misses": M,
+        "False_Alarms": F,
+        "Correct_Negatives": C,
+        "POD": POD,           # Probability of Detection
+        "FAR": FAR,           # False Alarm Ratio
+        "CSI": CSI,           # Critical Success Index
+        "Bias": Bias,         # Frequency Bias
+        "POFD": POFD,         # Probability of False Detection
+        "Accuracy": Accuracy
+    }
+
+cml_sat_imerg_stats = categorical_stats(
+    forecast=cml_sat_daily_agg.values,
+    observation=imerg_daily_agg.values,
+    threshold=1.0   # 1 mm/day wet-day threshold
+)
+
+era5_imerg_stats = categorical_stats(
+    forecast=era5_daily_data.values,
+    observation=imerg_daily_agg.values,
+    threshold=1.0   # 1 mm/day wet-day threshold
+)
+
+cml_sat_era5_stats = categorical_stats(
+    forecast=cml_sat_daily_agg.values,
+    observation=era5_daily_data.values,
+    threshold=1.0   # 1 mm/day wet-day threshold
+)
+
+imerg_era5_stats = categorical_stats(
+    forecast=imerg_daily_agg.values,
+    observation=era5_daily_data.values,
+    threshold=1.0   # 1 mm/day wet-day threshold
+)
+
+
+def cat_stats_dict_to_df(stats_dict, product_names,
+                          metrics=('POD', 'FAR', 'Bias', 'CSI')):
+    """
+    Convert multiple categorical_stats dict outputs into
+    a DataFrame suitable for Roebber / performance diagrams.
+
+    Parameters
+    ----------
+    stats_dict : dict
+        {product_name: stats_dict_from_categorical_stats}
+    product_names : list
+        Ordered list of product names (columns)
+    metrics : tuple
+        Metrics to include (row index)
+
+    Returns
+    -------
+    pandas.DataFrame
+        index = metrics
+        columns = product_names
+    """
+
+    df = pd.DataFrame(index=metrics, columns=product_names, dtype=float)
+
+    for prod in product_names:
+        for m in metrics:
+            df.loc[m, prod] = stats_dict[prod][m]
+
+    return df
+
+
+stats_imerg_obs = {
+    "CML-SAT": cml_sat_imerg_stats,
+    "ERA5":    era5_imerg_stats
+}
+
+cat_df_imerg_obs = cat_stats_dict_to_df(
+    stats_dict=stats_imerg_obs,
+    product_names=["CML-SAT", "ERA5"]
+)
+
+stats_era5_obs = {
+    "CML-SAT": cml_sat_era5_stats,
+    "IMERG":   imerg_era5_stats
+}
+
+cat_df_era5_obs = cat_stats_dict_to_df(
+    stats_dict=stats_era5_obs,
+    product_names=["CML-SAT", "IMERG"]
+)
+
+
+
+def make_cat_performance_diagram(cat_df_res):
+    '''
+    cat_df_res = should be a dataframe of the categorical metrics containing POD, FAR etc as rown names and
+                 product names for which metric was computed as column names
+
+    eval_elements = should be a list containing:
+                    columnm names, plot marker marker, product evaluated,colors to use for plot
+    '''
+    def calculate_csi(pod, success_ratio):
+        csi = np.where(pod + success_ratio == 0, 0, pod * success_ratio / (pod + success_ratio - pod * success_ratio))
+        return np.nan_to_num(csi)
+    # floating variables
+    # ['k','k','r','r']
+    clrs = ['r','c','g','m','b','orange','k','grey','lime','khaki','royalblue','lavender','wheat']
+    # ['o','*','o','*',]
+    mrker = ['o','p','D','^','s','8','*','^', '<', '>',]
+    pod_spc = np.linspace(0, 1, 100)
+    success_ratio_spc = np.linspace(0, 1, 100)
+
+    X, Y = np.meshgrid(success_ratio_spc, pod_spc)
+    CSI = calculate_csi(Y, X)
+
+    # Create the main figure and axis
+    fig, ax1 = plt.subplots(figsize=(6,8), dpi=1000)
+    plt.subplots_adjust(bottom=0.3)
+
+    # Plot the contour lines for CSI
+    csi_levels = np.arange(0.1, 1.0, 0.1)
+    CSI_contours = ax1.contour(X, Y, CSI, levels=csi_levels, colors='brown', linestyles='solid')
+    # ax1.clabel(CSI_contours, inline=1, fontsize=10, fmt='%1.1f', colors='r')
+
+    # Plotting bias lines
+    for fb_level in [0.5, 1, 1.2, 1.5, 2, 4]:
+        fb_line = pod_spc * fb_level
+        valid = fb_line <= 1
+        ax1.plot(success_ratio_spc[valid], fb_line[valid], c='steelblue',ls = '--', lw=2)
+        label_x = 1 / fb_level if fb_level > 1 else 0.95
+        label_y = fb_line[int(label_x * 100)] if fb_level > 1 else 0.95 * fb_level
+        ax1.text(label_x, label_y, str(fb_level), color='steelblue',
+                    fontsize=12, ha='center',fontweight='bold')
+        if fb_level == 1:  # We'll only write "Bias" near the line where the frequency bias is 1
+            ax1.text(0.5, 0.5*fb_level, 'Bias', color='steelblue', fontsize=12, fontweight='bold' ,
+                        ha='center', va='bottom', rotation=45) # , backgroundcolor='white'
+
+    # Plotting points for each sim obs eval data points
+    for it in enumerate(cat_df_res.columns.to_list()):
+        clnme_used = it[1]
+        evl_prdt = clnme_used#.split('vrs')[0]
+
+        podd = cat_df_res.loc['POD',clnme_used]
+        farr = cat_df_res.loc['FAR',clnme_used]
+
+        succ_ratio = 1 - farr # success ration
+
+        ax1.plot(succ_ratio, podd, marker = mrker[it[0]], color=clrs[it[0]], markersize=8, label=evl_prdt)
+
+    ax1.minorticks_on()
+    ax1.tick_params(which='major', axis= 'both', direction='in',length=5, top=True, 
+                    right=True, bottom=True, left=True)  # Adjust major tick length
+    ax1.tick_params(which='minor', axis= 'both', direction='in', length=2.5, top=True, 
+                    right=True, bottom=True, left=True) 
+    # Customizing the axis
+    # ax1.set_title('Performance Diagram')
+    ax1.set_xlabel('Success Ratio (1 - FAR)',fontsize=12)
+    ax1.set_xticklabels([f'{level:.1f}' for level in [0.0,0.2,0.4,
+                        0.6,0.8,1.0]], fontsize=15)
+    ax1.set_ylabel('POD', fontsize=12)
+    ax1.set_yticklabels([f'{level:.1f}' for level in [0.0,0.2,0.4,
+                        0.6,0.8,1.0,1.1]], fontsize=12)
+    ax1.grid(True,ls='--',lw=0.5)
+
+    # Secondary y-axis for CSI
+    ax2 = ax1.twinx()
+    ax2.set_ylabel('CSI', fontsize=15, color='brown')  # Setting the label color to red
+    ax2.set_ylim(0, 1)
+    ax2.set_yticks(csi_levels)
+    ax2.set_yticklabels([f'{level:.1f}' for level in csi_levels], color='brown',
+                        fontsize=12)  # Setting the tick labels color to red
+    ax2.minorticks_on()
+    ax2.tick_params(which='major', axis= 'both', direction='in',length=5, 
+                    top=True, right=True, bottom=True, left=True)  # Adjust major tick length
+    ax2.tick_params(which='minor', axis= 'both', direction='in', length=2.5, 
+                    top=True, right=True, bottom=True, left=True) 
+
+    # Fixing the legend issue
+    # Collect labels and handles and keep only unique entries for the legend
+    
+    handles, labels = ax1.get_legend_handles_labels()
+    unique = dict(zip(labels, handles)).items()
+    ax1.legend(handles=handles, labels=labels, loc='upper center', frameon=False, 
+               bbox_to_anchor=(0.5, -0.12), ncol=2, fontsize=15)
+    
+
+make_cat_performance_diagram(cat_df_imerg_obs)
+
+make_cat_performance_diagram(cat_df_era5_obs)

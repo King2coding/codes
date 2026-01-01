@@ -323,16 +323,32 @@ def daily_total_from_15min(R15):
     Rd.attrs["long_name"] = "Daily total rainfall (mean rate × 24)"
     return Rd
 
+def ensure_time_dim(da, time_value):
+    """
+    Ensure DataArray has a time dimension (CF-compliant).
+    """
+    if "time" not in da.dims:
+        da = da.expand_dims(time=[pd.to_datetime(time_value)])
+    else:
+        da = da.assign_coords(time=pd.to_datetime(da.time.values))
+    return da
 # -------------------------
 # SAVE NETCDF (1 file/day)
 # -------------------------
-def save_day_files(R15, Rd, day_str, alg="OrigV", producer="Kingsley Kumah"):
+
+def save_day_files(R15, Rd, day_str, alg="V1", producer="Kingsley Kumah"):
     os.makedirs(path_to_put_15min_cml_rainfall_estimates, exist_ok=True)
     os.makedirs(path_to_put_daily_cml_rainfall_estimates, exist_ok=True)
 
+    # --------------------------------------------------
+    # FIX: ensure time dimension exists
+    # --------------------------------------------------
+    # R15 = ensure_time_dim(R15, R15.time.values[0])
+    Rd  = ensure_time_dim(Rd,  pd.to_datetime(day_str))
+
     # datasets
-    ds15 = R15.to_dataset()
-    dsd  = Rd.to_dataset()
+    ds15 = R15.to_dataset(name="rain_rate")
+    dsd  = Rd.to_dataset(name="rain_daily_total")
 
     # global attrs (keep concise but useful)
     common_attrs = {
@@ -383,7 +399,7 @@ bt_all  = list_nc(path_to_msg_ir_fls)
 clm_all = list_nc(path_to_msg_clm_fls)
 
 # choose your operational period (example: Sep–Dec 2025)
-days = pd.date_range("2025-09-01", "2025-12-31", freq="D")
+days = pd.date_range("2025-09-17", "2025-12-05", freq="D")
 
 for day in days:
     day_str = day.strftime("%Y-%m-%d")
@@ -415,126 +431,126 @@ for day in days:
 
     Rd = daily_total_from_15min(R15)
 
-    save_day_files(R15, Rd, day_str, alg="OrigV", producer="Kingsley Kumah")
+    save_day_files(R15, Rd, day_str, alg="V1", producer="Kingsley Kumah")
 
 
 #%%
 # plot using cartopy to show boundary
-import matplotlib.pyplot as plt
-import cartopy.crs as ccrs
-import cartopy.feature as cfeature
-from matplotlib.colors import BoundaryNorm
-from matplotlib.cm import ScalarMappable
-import numpy as np
-from matplotlib.colors import BoundaryNorm, ListedColormap
-import matplotlib.pyplot as plt
-import shapely.geometry as sgeom
-import shapely.vectorized as svec
-import numpy as np
+# import matplotlib.pyplot as plt
+# import cartopy.crs as ccrs
+# import cartopy.feature as cfeature
+# from matplotlib.colors import BoundaryNorm
+# from matplotlib.cm import ScalarMappable
+# import numpy as np
+# from matplotlib.colors import BoundaryNorm, ListedColormap
+# import matplotlib.pyplot as plt
+# import shapely.geometry as sgeom
+# import shapely.vectorized as svec
+# import numpy as np
 
-def add_geo(ax):
-    ax.coastlines(resolution="10m", linewidth=1.1, color="black")
-    ax.add_feature(cfeature.BORDERS, linewidth=0.9, edgecolor="black")
-    gl = ax.gridlines(draw_labels=True, linewidth=0.5, color="gray", alpha=0.7, linestyle="--")
-    gl.top_labels = False
-    gl.right_labels = False
-    gl.xlabel_style = {"size": 10, "color": "black"}
-    gl.ylabel_style = {"size": 10, "color": "black"}
-    gl.xlocator = plt.MultipleLocator(1.0)
-    gl.ylocator = plt.MultipleLocator(1.0)
+# def add_geo(ax):
+#     ax.coastlines(resolution="10m", linewidth=1.1, color="black")
+#     ax.add_feature(cfeature.BORDERS, linewidth=0.9, edgecolor="black")
+#     gl = ax.gridlines(draw_labels=True, linewidth=0.5, color="gray", alpha=0.7, linestyle="--")
+#     gl.top_labels = False
+#     gl.right_labels = False
+#     gl.xlabel_style = {"size": 10, "color": "black"}
+#     gl.ylabel_style = {"size": 10, "color": "black"}
+#     gl.xlocator = plt.MultipleLocator(1.0)
+#     gl.ylocator = plt.MultipleLocator(1.0)
 
 
-da = Rd  # your DataArray (y=lat, x=lon)
-da = da.sortby("y")  # safety: ensures south->north increasing
-daily_bins = np.arange(0,22,2.5)
-# [
-#     0,   1,   2,   5,   10,
-#     20,  30,  40
-# ]
+# da = Rd  # your DataArray (y=lat, x=lon)
+# da = da.sortby("y")  # safety: ensures south->north increasing
+# daily_bins = np.arange(0,22,2.5)
+# # [
+# #     0,   1,   2,   5,   10,
+# #     20,  30,  40
+# # ]
 
-base_cmap = plt.cm.Spectral_r  # or turbo   # or viridis, plasma, 
-daily_cmap = ListedColormap(
-    base_cmap(np.linspace(0.05, 0.95, len(daily_bins) - 1))
-)
+# base_cmap = plt.cm.Spectral_r  # or turbo   # or viridis, plasma, 
+# daily_cmap = ListedColormap(
+#     base_cmap(np.linspace(0.05, 0.95, len(daily_bins) - 1))
+# )
 
-daily_norm = BoundaryNorm(
-    boundaries=daily_bins,
-    ncolors=daily_cmap.N,
-    clip=True
-)
+# daily_norm = BoundaryNorm(
+#     boundaries=daily_bins,
+#     ncolors=daily_cmap.N,
+#     clip=True
+# )
 
-import cartopy.io.shapereader as shpreader
-import shapely.geometry as sgeom
+# import cartopy.io.shapereader as shpreader
+# import shapely.geometry as sgeom
 
-shp = shpreader.natural_earth(
-    resolution="10m",
-    category="cultural",
-    name="admin_0_countries"
-)
+# shp = shpreader.natural_earth(
+#     resolution="10m",
+#     category="cultural",
+#     name="admin_0_countries"
+# )
 
-reader = shpreader.Reader(shp)
-ghana_geom = None
-for rec in reader.records():
-    if rec.attributes["NAME_LONG"] == "Ghana":
-        ghana_geom = rec.geometry
-        break
+# reader = shpreader.Reader(shp)
+# ghana_geom = None
+# for rec in reader.records():
+#     if rec.attributes["NAME_LONG"] == "Ghana":
+#         ghana_geom = rec.geometry
+#         break
 
-# Ghana geometry is already loaded as ghana_geom (shapely)
-lon2d, lat2d = np.meshgrid(
-    da["x"].values,
-    da["y"].values
-)
+# # Ghana geometry is already loaded as ghana_geom (shapely)
+# lon2d, lat2d = np.meshgrid(
+#     da["x"].values,
+#     da["y"].values
+# )
 
-ghana_mask = svec.contains(ghana_geom, lon2d, lat2d)
+# ghana_mask = svec.contains(ghana_geom, lon2d, lat2d)
 
-R_daily_ghana = da.where(ghana_mask)
+# R_daily_ghana = da.where(ghana_mask)
 
-proj = ccrs.PlateCarree()
-fig = plt.figure(figsize=(8,8), dpi=150)
-ax = plt.axes(projection=proj)
+# proj = ccrs.PlateCarree()
+# fig = plt.figure(figsize=(8,8), dpi=150)
+# ax = plt.axes(projection=proj)
 
-ax.set_extent([-3.5, 1.25, 4.5, 11.2], crs=proj)
+# ax.set_extent([-3.5, 1.25, 4.5, 11.2], crs=proj)
 
-# ax.add_feature(cfeature.OCEAN.with_scale("10m"), facecolor="aqua")
-# ax.add_feature(cfeature.LAKES.with_scale("10m"), facecolor="aqua", edgecolor="none")
-ax.coastlines(resolution="10m", linewidth=1.0)
-ax.add_feature(cfeature.BORDERS.with_scale("10m"), linewidth=0.7, edgecolor="0.25")
+# # ax.add_feature(cfeature.OCEAN.with_scale("10m"), facecolor="aqua")
+# # ax.add_feature(cfeature.LAKES.with_scale("10m"), facecolor="aqua", edgecolor="none")
+# ax.coastlines(resolution="10m", linewidth=1.0)
+# ax.add_feature(cfeature.BORDERS.with_scale("10m"), linewidth=0.7, edgecolor="0.25")
 
-gl = ax.gridlines(draw_labels=True, linewidth=0.4, color="0.6", alpha=0.6, linestyle="--")
-gl.right_labels = False
-gl.top_labels = False
+# gl = ax.gridlines(draw_labels=True, linewidth=0.4, color="0.6", alpha=0.6, linestyle="--")
+# gl.right_labels = False
+# gl.top_labels = False
 
-# ensure y-axis is ordered correctly
-R_daily = R_daily_ghana.sortby("y")
+# # ensure y-axis is ordered correctly
+# R_daily = R_daily_ghana.sortby("y")
 
-im = ax.pcolormesh(
-    R_daily["x"].values,
-    R_daily["y"].values,
-    R_daily.values,
-    cmap=daily_cmap,
-    norm=daily_norm,
-    transform=proj,
-    shading="auto"
-)
+# im = ax.pcolormesh(
+#     R_daily["x"].values,
+#     R_daily["y"].values,
+#     R_daily.values,
+#     cmap=daily_cmap,
+#     norm=daily_norm,
+#     transform=proj,
+#     shading="auto"
+# )
 
-# Ghana outline on top
-ax.add_geometries(
-    [ghana_geom],
-    crs=proj,
-    facecolor="none",
-    edgecolor="black",
-    linewidth=1.2,
-    zorder=3
-)
+# # Ghana outline on top
+# ax.add_geometries(
+#     [ghana_geom],
+#     crs=proj,
+#     facecolor="none",
+#     edgecolor="black",
+#     linewidth=1.2,
+#     zorder=3
+# )
 
-add_geo(ax)
-ax.set_title(f"Daily total predicted rainfall\n{str(day_str)}")
+# add_geo(ax)
+# ax.set_title(f"Daily total predicted rainfall\n{str(day_str)}")
 
-cb = plt.colorbar(
-    im, ax=ax, ticks=daily_bins,
-    fraction=0.046, pad=0.04,
-    extend='max'
-)
-cb.set_label("mm day$^{-1}$")
+# cb = plt.colorbar(
+#     im, ax=ax, ticks=daily_bins,
+#     fraction=0.046, pad=0.04,
+#     extend='max'
+# )
+# cb.set_label("mm day$^{-1}$")
 
-plt.show()
+# plt.show()
