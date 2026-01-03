@@ -7,6 +7,9 @@ from datetime import timedelta
 from My_program_utils import *
 import joblib
 import os, re, glob
+from collections import OrderedDict
+from pathlib import Path
+from datetime import datetime
 
 import xarray as xr
 from rasterio.transform import from_bounds
@@ -21,10 +24,12 @@ from pyproj import CRS
 import xgboost as xgb
 from quantnn.quantiles import posterior_quantiles
 #%% Paths
-path_to_msg_ir_fls = r'/home/kkumah/Projects/cml-stuff/satellite_data/msg_val/run_20251229_205931'
-path_to_msg_clm_fls = r'/home/kkumah/Projects/cml-stuff/satellite_data/msg_clm_val/run_20251229_205720'
+path_to_msg_ir_fls = r'/home/kkumah/Projects/cml-stuff/satellite_data/msg_val'
+path_to_msg_clm_fls = r'/home/kkumah/Projects/cml-stuff/satellite_data/msg_clm_val'
 path_to_put_15min_cml_rainfall_estimates = r'/home/kkumah/Projects/cml-stuff/out_15min_cml_rain_oper'
 path_to_put_daily_cml_rainfall_estimates = r'/home/kkumah/Projects/cml-stuff/out_daily_cml_rain_oper'
+
+LOG_DIR = Path("/home/kkumah/Projects/cml-stuff/out_logs")
 
 path_to_ml_model = r'/home/kkumah/Projects/cml-stuff/out_train_model'
 #%% Floating Variables
@@ -65,14 +70,81 @@ target_lons = np.arange(lon_min, lon_max + 1e-6, res_deg)
 # -------------------------
 def list_nc(root):
     return sorted(glob.glob(os.path.join(root, "**", "*.nc"), recursive=True))
+# def list_nc(root):
+#     nc_files = []
+#     for r, _, files in os.walk(root):
+#         for f in files:
+#             if f.endswith(".nc"):
+#                 nc_files.append(os.path.join(r, f))
+#     return sorted(nc_files)
+# def pick_files_for_day(files, day_str):
+#     """
+#     day_str: 'YYYY-MM-DD'
+#     Select files whose path/name contains YYYYMMDD.
+#     """
+#     ymd = day_str.replace("-", "")
+#     return [fp for fp in files if ymd in os.path.basename(fp)]
 
-def pick_files_for_day(files, day_str):
+# matches 20251017T123000Z
+
+TS_RE = re.compile(r"\d{8}T\d{6}Z")
+
+def extract_time(fp):
+    m = TS_RE.search(fp)
+    if not m:
+        return None
+    return pd.to_datetime(m.group(0), format="%Y%m%dT%H%M%SZ")
+
+def pick_files_for_day_rounded(files, day_str, freq="15min"):
     """
-    day_str: 'YYYY-MM-DD'
-    Select files whose path/name contains YYYYMMDD.
+    Keep ONE file per rounded 15-min slot.
     """
-    ymd = day_str.replace("-", "")
-    return [fp for fp in files if ymd in os.path.basename(fp)]
+    day = pd.to_datetime(day_str)
+    out = {}
+
+    for fp in files:
+        t = extract_time(fp)
+        if t is None:
+            continue
+
+        if t.date() != day.date():
+            continue
+
+        t_round = t.round(freq)
+
+        # keep first occurrence per rounded slot
+        if t_round not in out:
+            out[t_round] = fp
+
+    # return files ordered by rounded time
+    return [out[k] for k in sorted(out)]
+
+LOG_DIR.mkdir(parents=True, exist_ok=True)
+
+def is_valid_netcdf(path):
+    try:
+        xr.open_dataset(path, engine="netcdf4").close()
+        return True
+    except Exception:
+        return False
+
+
+def validate_files(files, product, day_str):
+    valid, bad = [], []
+
+    for f in files:
+        if is_valid_netcdf(f):
+            valid.append(f)
+        else:
+            bad.append(f)
+
+    if bad:
+        logfile = LOG_DIR / f"bad_{product}_files_{day_str.replace('-', '')}.txt"
+        with open(logfile, "a") as lf:
+            for bf in bad:
+                lf.write(f"{datetime.utcnow().isoformat()} | {bf}\n")
+
+    return valid
 
 # -------------------------
 # TIME ROUNDING
@@ -220,10 +292,52 @@ def predict_slice_meanq(time_val,
 # -------------------------
 # OPEN + REPROJECT + CLIP + INTERP (per day)
 # -------------------------
-def open_and_prepare_msg_day(bt_files_day, clm_files_day):
-    # open only the day's files
-    msg_bt  = xr.open_mfdataset(bt_files_day,  combine="by_coords")
-    msg_clm = xr.open_mfdataset(clm_files_day, combine="by_coords")
+def open_and_prepare_msg_day(day_str,
+    bt_files_all,
+    clm_files_all,
+    require_clm=True
+    ):
+    """
+    day_str: 'YYYY-MM-DD'
+    """
+
+    # -------------------------------------------------
+    # 1. Collect files for day
+    # -------------------------------------------------
+    bt_day  = pick_files_for_day_rounded(bt_files_all, day_str)
+    clm_day = pick_files_for_day_rounded(clm_files_all, day_str)
+
+    # -------------------------------------------------
+    # 2. Validate + log corrupt files
+    # -------------------------------------------------
+    bt_day  = validate_files(bt_day,  product="msg_ir",  day_str=day_str)
+    clm_day = validate_files(clm_day, product="msg_clm", day_str=day_str)
+
+    # -------------------------------------------------
+    # 3. Safety checks
+    # -------------------------------------------------
+    if len(bt_day) == 0:
+        raise RuntimeError(f"[{day_str}] No valid MSG IR files")
+
+    if require_clm and len(clm_day) == 0:
+        raise RuntimeError(f"[{day_str}] No valid MSG CLM files")
+
+    # -------------------------------------------------
+    # 4. Open datasets safely
+    # -------------------------------------------------
+    msg_bt = xr.open_mfdataset(
+        bt_day,
+        combine="by_coords",
+        parallel=False
+    )
+
+    msg_clm = None
+    if clm_day:
+        msg_clm = xr.open_mfdataset(
+            clm_day,
+            combine="by_coords",
+            parallel=False
+        )
 
     msg_bt  = round_time_index(msg_bt,  TIME_ROUND)
     msg_clm = round_time_index(msg_clm, TIME_ROUND)
@@ -336,7 +450,7 @@ def ensure_time_dim(da, time_value):
 # SAVE NETCDF (1 file/day)
 # -------------------------
 
-def save_day_files(R15, Rd, day_str, alg="V1", producer="Kingsley Kumah"):
+def save_day_files(R15, Rd, day_str, alg="V1", producer="K. K. Kumah"):
     os.makedirs(path_to_put_15min_cml_rainfall_estimates, exist_ok=True)
     os.makedirs(path_to_put_daily_cml_rainfall_estimates, exist_ok=True)
 
@@ -375,8 +489,8 @@ def save_day_files(R15, Rd, day_str, alg="V1", producer="Kingsley Kumah"):
 
     # filenames
     ymd = day_str.replace("-", "")
-    fn15 = f"ghana_rain_xgb_oper_15min_{alg}_{ymd}.nc"
-    fnd  = f"ghana_rain_xgb_oper_daily_{alg}_{ymd}.nc"
+    fn15 = f"CML-SAT_Rainfall_Estimates_15min_{alg}_{ymd}.nc"
+    fnd  = f"CML-SAT_Rainfall_Estimates_Daily_{alg}_{ymd}.nc"
 
     p15 = os.path.join(path_to_put_15min_cml_rainfall_estimates, fn15)
     pd1 = os.path.join(path_to_put_daily_cml_rainfall_estimates, fnd)
@@ -395,16 +509,16 @@ def save_day_files(R15, Rd, day_str, alg="V1", producer="Kingsley Kumah"):
 # -------------------------
 # MAIN OPERATIONAL DRIVER
 # -------------------------
-bt_all  = list_nc(path_to_msg_ir_fls)
-clm_all = list_nc(path_to_msg_clm_fls)
+bt_all  = sorted(list_nc(path_to_msg_ir_fls))
+clm_all = sorted(list_nc(path_to_msg_clm_fls))
 
 # choose your operational period (example: Sep–Dec 2025)
-days = pd.date_range("2025-09-17", "2025-12-05", freq="D")
+days = pd.date_range("2025-09-06", "2025-12-05", freq="D")
 
 for day in days:
     day_str = day.strftime("%Y-%m-%d")
-    bt_day  = pick_files_for_day(bt_all,  day_str)
-    clm_day = pick_files_for_day(clm_all, day_str)
+    bt_day  = pick_files_for_day_rounded(bt_all,  day_str)
+    clm_day = pick_files_for_day_rounded(clm_all, day_str)
 
     if (len(bt_day) == 0) or (len(clm_day) == 0):
         print("Skipping (missing files):", day_str)
@@ -412,7 +526,7 @@ for day in days:
 
     print("\nProcessing:", day_str, "| BT:", len(bt_day), "| CLM:", len(clm_day))
 
-    msg_bt_ll, msg_clm_ll, cov = open_and_prepare_msg_day(bt_day, clm_day)
+    msg_bt_ll, msg_clm_ll, cov = open_and_prepare_msg_day(day_str,bt_day, clm_day)
 
     if cov["n_common"] == 0:
         print("Skipping (no common times):", day_str)
@@ -431,7 +545,7 @@ for day in days:
 
     Rd = daily_total_from_15min(R15)
 
-    save_day_files(R15, Rd, day_str, alg="V1", producer="Kingsley Kumah")
+    save_day_files(R15, Rd, day_str, alg="V1", producer="K. K. Kumah")
 
 
 #%%
