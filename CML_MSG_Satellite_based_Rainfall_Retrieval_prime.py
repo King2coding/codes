@@ -704,7 +704,45 @@ def correct_wet_dry(
     out = np.where(np.isfinite(bt_rastdat), keep.astype(np.int16), np.nan)
     return out
 
-def correct_wet_mask(bin_rast, bt_rast, meta, use_std=False, k_std=2.0):
+# def kstd_by_lat(lat):
+#     """
+#     lat: ndarray (same shape as raster)
+#     returns: ndarray of k_std with same shape
+#     """
+#     lat = np.asarray(lat)
+
+#     kstd = np.empty_like(lat, dtype="float32")
+
+#     kstd[lat < 5.5] = 0.3                     # Coastal savanna
+#     kstd[(lat >= 5.5) & (lat < 7.5)] = 0.7     # Forest zone
+#     kstd[(lat >= 7.5) & (lat < 9.0)] = 1.0     # Transitional
+#     kstd[lat >= 9.0] = 1.3                    # Guinea savanna
+
+#     return kstd      # very strict (anvil-dominated)
+
+def kstd_by_lat(lat):
+    """
+    lat: array (2D lat grid)
+    """
+    lat = np.asarray(lat)
+
+    k = np.zeros_like(lat, dtype="float32")
+
+    # coastal → forest
+    k = np.where(lat < 5.5, 0.4, k)
+    k = np.where((lat >= 5.5) & (lat < 7.5),
+                 0.6 + (lat - 5.5) * (0.6 - 0.3) / (7.5 - 5.5),
+                 k)
+
+    # forest → savanna
+    k = np.where((lat >= 7.5) & (lat < 9.5),
+                 0.9 + (lat - 7.5) * (0.9 - 0.6) / (9.5 - 7.5),
+                 k)
+
+    k = np.where(lat >= 9.5, 1.3, k)
+    return k
+
+def correct_wet_mask(bin_rast, bt_rast, meta, use_std=False, lat_grid=None):
     # relaxed: keep where BT <= mean + 2*std (per wet patch)
     gdf = array_to_vector(bin_rast, [1], meta["transform"])
     if len(gdf)==0: 
@@ -716,7 +754,11 @@ def correct_wet_mask(bin_rast, bt_rast, meta, use_std=False, k_std=2.0):
     mean_r = rasterize_me(meta, gdf, "mean"); std_r = rasterize_me(meta, gdf, "std")
     # choose threshold: mean only (old) or mean + k_std*std
     if use_std:
-        thr = mean_r - (k_std * std_r)
+        
+        kstd_grid = kstd_by_lat(lat_grid)
+
+        thr = mean_r - (kstd_grid * std_r)
+        # thr = mean_r - (k_std * std_r)
     else:
         thr = mean_r
     keep = (bin_rast==1) & (bt_rast <= thr)
@@ -733,7 +775,7 @@ def smooth_da_mean(da, win=3):
     sm.attrs["long_name"] = f"{da.attrs.get('long_name','pred')} (rolling {win}x{win})"
     return sm
 
-def predict_slice_meanq(time_val, win_smooth=2, apply_patch=True,
+def predict_slice_meanq(time_val, win_smooth=('Yes', 3), apply_patch=True,
                         drizzle_floor=0.10, use_trimmed=False, kstd=0.7,):
     # --- gather features ---
     b1 = BT_IR108.sel(time=time_val).where(mask_cloud.sel(time=time_val))
@@ -776,23 +818,26 @@ def predict_slice_meanq(time_val, win_smooth=2, apply_patch=True,
     # drizzle filter then smoothing
     if drizzle_floor is not None:
         rain_map.values = np.where(rain_map.values < drizzle_floor, 0.0, rain_map.values)
-    if win_smooth and win_smooth > 1:
+    if win_smooth[0] == "Yes" and win_smooth[1] > 1:
         rain_map = smooth_da_mean(rain_map, win=win_smooth)
 
     rain_map_cor = rain_map.copy()
 
     # optional patch correction by IR108
     if apply_patch:
+        lat_grid = np.repeat(b1["y"].values[:, None], b1.sizes["x"], axis=1)
         meta = xarray_meta_from_da(b1)
-        wet_grid = (rain_map.values > 0).astype(np.int16)
+        wet_grid = (rain_map_cor.values > 0).astype(np.int16)
         corr_wet = correct_wet_mask(wet_grid, 
                                     b1.values.astype("float32"), 
-                                    meta, use_std=True, k_std=kstd)
+                                    meta, use_std=True,                                     
+                                    lat_grid=lat_grid)
         
         rain_map_cor = rain_map_cor.where(corr_wet == 1, 0.0)
     # smoothing
-    rain_smooth = smooth_da_mean(rain_map_cor, win=win_smooth)
-    return rain_smooth, rain_map
+    # if win_smooth[0] == "Yes":
+    #     rain_smooth = smooth_da_mean(rain_map_cor, win=win_smooth[1])
+    return rain_map_cor, rain_map
 
 from quantnn.quantiles import posterior_mean, posterior_quantiles
 
@@ -1142,14 +1187,40 @@ plt.show()
 # Daily analysis
 dte_t = [t for t in times_30 if pd.to_datetime(t).date().strftime('%Y-%m-%d')=='2025-06-18']
 
-pred_pairs = [predict_slice_meanq(t, win_smooth=3, apply_patch=True) for t in dte_t]
+pred_pairs = [predict_slice_meanq(t, win_smooth=('Yes', 3), apply_patch=True) for t in dte_t]
+pred_pairs_unsmooth = [predict_slice_meanq(t, win_smooth=('No',0), apply_patch=True) for t in dte_t]
+
 R_pred_30_corr        = xr.concat([p[0] for p in pred_pairs], dim="time").transpose("time","y","x")
 R_pred_30_corr["time"]        = dte_t
+
+t0 = dte_t[0]
 
 R_daily_mean = R_pred_30_corr.mean(dim='time') * 24
 R_daily_mean["time"] = pd.to_datetime(t0).date().strftime('%Y-%m-%d') 
 R_daily_mean.name = "R_daily_total_mm_per_day"
 R_daily_mean.attrs["units"] = "mm day-1"
+
+
+R_pred_30_corr_unsmooth        = xr.concat([p[0] for p in pred_pairs_unsmooth], dim="time").transpose("time","y","x")
+R_pred_30_corr_unsmooth["time"]        = dte_t
+
+R_daily_mean_unsmooth = R_pred_30_corr_unsmooth.mean(dim='time') * 24
+R_daily_mean_unsmooth["time"] = pd.to_datetime(t0).date().strftime('%Y-%m-%d') 
+R_daily_mean_unsmooth.name = "R_daily_total_mm_per_day"
+R_daily_mean_unsmooth.attrs["units"] = "mm day-1"
+
+imrg = xr.open_dataset(r'/home/kkumah/Projects/cml-stuff/satellite_data/imergv07/g4.timeAvgMap.GPM_3IMERGDL_07_precipitation.20250618-20250618.180W_90S_180E_90N.nc')
+
+
+fg,ax = plt.subplots(figsize=(8,6), dpi=150)
+lat_profile_sm = R_daily_mean.mean(dim='x').plot(y='y',ax=ax, color='b', label='XGB Daily Mean')
+lat_profile_unsm = R_daily_mean_unsmooth.mean(dim='x').plot(y='y',ax=ax, color='g', label='XGB Daily Mean (unsmoothed)')
+
+imrg_profile = imrg['GPM_3IMERGDL_07_precipitation'].mean(dim='lon').plot(y='lat',ax=ax, color='r', label='IMERG Daily Mean')
+
+ax.legend()
+
+imrg['GPM_3IMERGDL_07_precipitation'].plot(cmap='Spectral_r', vmin=0, vmax=20)
 
 # plot using cartopy to show boundary
 import matplotlib.pyplot as plt
@@ -1163,8 +1234,18 @@ import matplotlib.pyplot as plt
 import shapely.geometry as sgeom
 import shapely.vectorized as svec
 import numpy as np
+def add_geo(ax):
+    ax.coastlines(resolution="10m", linewidth=1.1, color="black")
+    ax.add_feature(cfeature.BORDERS, linewidth=0.9, edgecolor="black")
+    gl = ax.gridlines(draw_labels=True, linewidth=0.5, color="gray", alpha=0.7, linestyle="--")
+    gl.top_labels = False
+    gl.right_labels = False
+    gl.xlabel_style = {"size": 10, "color": "black"}
+    gl.ylabel_style = {"size": 10, "color": "black"}
+    gl.xlocator = plt.MultipleLocator(1.0)
+    gl.ylocator = plt.MultipleLocator(1.0)
 
-da = R_daily_mean  # your DataArray (y=lat, x=lon)
+da = R_daily_mean_unsmooth  # your DataArray (y=lat, x=lon)
 da = da.sortby("y")  # safety: ensures south->north increasing
 daily_bins = np.arange(0,22,2.5)
 # [
@@ -1207,7 +1288,7 @@ lon2d, lat2d = np.meshgrid(
 
 ghana_mask = svec.contains(ghana_geom, lon2d, lat2d)
 
-R_daily_ghana = R_daily_mean.where(ghana_mask)
+R_daily_ghana = da.where(ghana_mask)
 
 proj = ccrs.PlateCarree()
 fig = plt.figure(figsize=(8,8), dpi=150)
@@ -1248,7 +1329,7 @@ ax.add_geometries(
 )
 
 add_geo(ax)
-ax.set_title(f"Daily total predicted rainfall\n{str(R_daily.time.values)}\n{alg}")
+ax.set_title(f"Daily total predicted rainfall\n{str(R_daily.time.values)}")
 
 cb = plt.colorbar(
     im, ax=ax, ticks=daily_bins,
@@ -1258,3 +1339,99 @@ cb = plt.colorbar(
 cb.set_label("mm day$^{-1}$")
 
 plt.show()
+
+
+#%%
+def compute_pdf_elements_from_array(data_array, bins):
+    """
+    Compute PDF elements (PDFc and PDFv) from a 2D numpy array.
+
+    Parameters:
+    - data_array: 2D numpy array containing the data.
+    - bins: List of bin edges.
+
+    Returns:
+    - pdf_df: A dictionary containing bins, PDFc, and PDFv.
+    """
+    pdfc = []  # PDF by occurrence
+    pdfv = []  # PDF by volume
+    bin_labels = []  # Bin labels for the output
+
+    # Flatten the 2D array to 1D
+    flattened_data = data_array.flatten()
+
+    # Remove NaN values from the flattened data
+    flattened_data = flattened_data[~np.isnan(flattened_data)]
+
+    total_count = len(flattened_data)
+    total_volume = 0
+
+    # Loop through bins to compute PDFc and PDFv
+    for i, bn in enumerate(bins):
+        if i == 0:
+            bin_data = flattened_data[flattened_data <= bn]
+        else:
+            bin_data = flattened_data[(flattened_data > bins[i - 1]) & (flattened_data <= bn)]
+
+        # PDFc: Percentage of occurrences in the bin
+        bin_count = len(bin_data)
+        pdfc.append((bin_count / total_count)) # * 100
+
+        # PDFv: Percentage of volume in the bin
+        if bin_count > 0:
+            bin_mean = np.mean(bin_data)
+            bin_volume = bin_count * bin_mean
+        else:
+            bin_volume = 0
+
+        total_volume += bin_volume
+        pdfv.append(bin_volume)
+
+        # Add bin label
+        if i == 0:
+            bin_labels.append(f"<= {bn}")
+        else:
+            bin_labels.append(f"{bins[i - 1]} - {bn}")
+
+    # Normalize PDFv to percentages
+    pdfv = [(volume / total_volume) for volume in pdfv] # * 100
+
+    # Create a dictionary with bin, pdfc, and pdfv
+    pdf_dict = {
+        "bin": bins,
+        "pdfc": pdfc,
+        "pdfv": pdfv
+    }
+
+    del(flattened_data, bin_data
+        ,total_count, total_volume
+        ,bin_count, bin_mean, bin_volume
+        ,bin_labels)
+
+    # gc.collect()
+
+    return pdf_dict
+
+bins = [0.2 * (2 ** i) for i in range(11)]
+
+rdaily_sm = compute_pdf_elements_from_array(R_daily_mean.data, bins)
+rdaily_unsm = compute_pdf_elements_from_array(R_daily_mean_unsmooth.data, bins)
+imerg_ = compute_pdf_elements_from_array(imrg['GPM_3IMERGDL_07_precipitation'].values, bins)
+
+fnt_size = 13
+fg, axes = plt.subplots(figsize=(5, 5), sharey=True, constrained_layout=True)
+lw = 3.5
+# plot global pdfs
+axes.plot(bins,imerg_['pdfv'], 
+             label='IMERG', lw=lw, c='k', ls='-')
+axes.plot(bins,rdaily_sm['pdfv'], 
+             label='Sm', lw=lw, c='orange', ls='-')
+axes.plot(bins,rdaily_unsm['pdfv'], 
+             label='Unsm', lw=lw, c='b',ls='-')
+axes.set_xscale('log')
+
+axes.legend(fontsize=fnt_size, frameon=False, loc='best')
+
+axes.set_ylabel('PDFv', fontsize=fnt_size)
+
+axes.set_xlabel('Rainfall [mm/day]', fontsize=fnt_size)

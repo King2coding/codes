@@ -18,7 +18,8 @@ import rioxarray
 imerg_dir = '/home/kkumah/Projects/cml-stuff/satellite_data/imergv07/data'
 era5_dir = '/home/kkumah/Projects/cml-stuff/satellite_data/era5'
 cml_sat_15min_dir = '/home/kkumah/Projects/cml-stuff/out_15min_cml_rain_oper'
-cml_sat_daily_dir = '/home/kkumah/Projects/cml-stuff/out_daily_cml_rain_oper' 
+cml_sat_daily_dir = r'/home/kkumah/Projects/cml-stuff/out_rain_trials/out_daily'
+# '/home/kkumah/Projects/cml-stuff/out_daily_cml_rain_oper' 
 
 plot_dir = '/home/kkumah/Projects/cml-stuff/plots'
 
@@ -26,6 +27,8 @@ plot_dir = '/home/kkumah/Projects/cml-stuff/plots'
 all_imerg_files = sorted([os.path.join(imerg_dir, f) for f in os.listdir(imerg_dir) if f.endswith('.nc4')])
 
 all_cml_sat_files = sorted([os.path.join(cml_sat_daily_dir, f) for f in os.listdir(cml_sat_daily_dir) if f.endswith('.nc')])
+
+all_cml_sat_15min_files = sorted([os.path.join(cml_sat_15min_dir, f) for f in os.listdir(cml_sat_15min_dir) if f.endswith('.nc')])
 
 era5_file = os.path.join(era5_dir, 'ERA5_total_precipitation_2025_09_12_Ghana.nc')
 
@@ -544,7 +547,6 @@ for day in days:
 imerg_daily_xarr = xr.concat(daily_xr, dim="time")
 
 
-
 # 2) Read and preprocess ERA5 data
 # era5_data = xr.open_dataset(era5_file)
 # era5_data = era5_data.rename({'valid_time': 'time'})
@@ -707,7 +709,7 @@ fig, axs = plot_precip_1x2_compare_ghana(
     lats=imerg_ghana_2dmean.latitude.values,
     titles=["IMERG", "ERA5", "CML-SAT"],
     vmin=0,
-    vmax=8
+    vmax=7
 )
 
 # 2) b) Spatial mean maps
@@ -759,8 +761,6 @@ axes.set_ylabel('PDFv', fontsize=fnt_size)
 
 axes.set_xlabel('Rainfall [mm/day]', fontsize=fnt_size)
 
-
-# a.grid(True, which='major', linestyle='--', linewidth=0.7, alpha=0.7)
 axes.minorticks_on()
 axes.tick_params(axis='both', which='major', length=7, width=1.2, labelsize=fnt_size)
 axes.tick_params(axis='both', which='minor', length=4, width=0.8)

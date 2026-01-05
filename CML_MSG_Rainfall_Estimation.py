@@ -26,8 +26,10 @@ from quantnn.quantiles import posterior_quantiles
 #%% Paths
 path_to_msg_ir_fls = r'/home/kkumah/Projects/cml-stuff/satellite_data/msg_val'
 path_to_msg_clm_fls = r'/home/kkumah/Projects/cml-stuff/satellite_data/msg_clm_val'
-path_to_put_15min_cml_rainfall_estimates = r'/home/kkumah/Projects/cml-stuff/out_15min_cml_rain_oper'
-path_to_put_daily_cml_rainfall_estimates = r'/home/kkumah/Projects/cml-stuff/out_daily_cml_rain_oper'
+path_to_put_15min_cml_rainfall_estimates = r'/home/kkumah/Projects/cml-stuff/out_rain_trials/out_15min'
+# r'/home/kkumah/Projects/cml-stuff/out_15min_cml_rain_oper'
+path_to_put_daily_cml_rainfall_estimates = r'/home/kkumah/Projects/cml-stuff/out_rain_trials/out_daily'
+# r'/home/kkumah/Projects/cml-stuff/out_daily_cml_rain_oper'
 
 LOG_DIR = Path("/home/kkumah/Projects/cml-stuff/out_logs")
 
@@ -182,9 +184,54 @@ def rasterize_me(meta_data, polygon2rasterize, rast_val):
                               out=out,
                               transform=meta_data["transform"])
 
+# def correct_wet_mask(bin_rast, bt_rast, meta, use_std=False, k_std=2.0):
+#     # # cold-core filter: keep where BT <= (mean - k_std*std) within each wet patch
+#     gdf = array_to_vector(bin_rast, [1], meta["transform"])
+#     if len(gdf)==0: 
+#         return bin_rast
+#     bt_stats = np.where(np.isfinite(bt_rast), bt_rast, -999.0)
+#     zs = zonal_stats(gdf.geometry, bt_stats, stats=["mean","std"],
+#                      affine=meta["transform"], nodata=-999.0)
+#     gdf = pd.concat([gdf.reset_index(drop=True), pd.DataFrame(zs)], axis=1)
+#     mean_r = rasterize_me(meta, gdf, "mean"); std_r = rasterize_me(meta, gdf, "std")
+#     # choose threshold: mean only (old) or mean - k_std*std
+#     if use_std:
+#         thr = mean_r - (k_std * std_r)
+#     else:
+#         thr = mean_r
+#     keep = (bin_rast==1) & (bt_rast <= thr)
+#     out = np.where(keep, 1, 0).astype(np.int16)
+#     out = np.where(np.isfinite(bt_rast), out, np.nan)
+#     return out
 
-def correct_wet_mask(bin_rast, bt_rast, meta, use_std=False, k_std=2.0):
-    # # cold-core filter: keep where BT <= (mean - k_std*std) within each wet patch
+def kstd_by_lat(lat):
+    """
+    lat: array (2D lat grid)
+    """
+    lat = np.asarray(lat)
+
+    k = np.zeros_like(lat, dtype="float32")
+
+    # coastal → forest
+    k = np.where(lat < 5.5, 0.4, k)
+    k = np.where((lat >= 5.5) & (lat < 7.5),
+                 0.6 + (lat - 5.5) * (0.6 - 0.3) / (7.5 - 5.5),
+                 k)
+
+    # forest → savanna
+    k = np.where((lat >= 7.5) & (lat < 9.5),
+                 0.9 + (lat - 7.5) * (0.9 - 0.6) / (9.5 - 7.5),
+                 k)
+
+    k = np.where(lat >= 9.5, 1.3, k)
+    return k
+
+def correct_wet_mask(bin_rast, 
+                     bt_rast, 
+                     meta, 
+                     use_std=False, 
+                     lat_grid=None):
+    # relaxed: keep where BT <= mean + 2*std (per wet patch)
     gdf = array_to_vector(bin_rast, [1], meta["transform"])
     if len(gdf)==0: 
         return bin_rast
@@ -193,15 +240,20 @@ def correct_wet_mask(bin_rast, bt_rast, meta, use_std=False, k_std=2.0):
                      affine=meta["transform"], nodata=-999.0)
     gdf = pd.concat([gdf.reset_index(drop=True), pd.DataFrame(zs)], axis=1)
     mean_r = rasterize_me(meta, gdf, "mean"); std_r = rasterize_me(meta, gdf, "std")
-    # choose threshold: mean only (old) or mean - k_std*std
+    # choose threshold: mean only (old) or mean + k_std*std
     if use_std:
-        thr = mean_r - (k_std * std_r)
+        
+        kstd_grid = kstd_by_lat(lat_grid)
+
+        thr = mean_r - (kstd_grid * std_r)
+        # thr = mean_r - (k_std * std_r)
     else:
         thr = mean_r
     keep = (bin_rast==1) & (bt_rast <= thr)
     out = np.where(keep, 1, 0).astype(np.int16)
     out = np.where(np.isfinite(bt_rast), out, np.nan)
     return out
+
 
 def smooth_da_mean(da, win=3):
     wet = da.where(da > 0)
@@ -278,16 +330,19 @@ def predict_slice_meanq(time_val,
 
     # optional patch correction by IR108
     if apply_patch:
+        lat_grid = np.repeat(b1["y"].values[:, None], b1.sizes["x"], axis=1)
         meta = xarray_meta_from_da(b1)
         wet_grid = (rain_map.values > 0).astype(np.int16)
         corr_wet = correct_wet_mask(wet_grid, 
                                     b1.values.astype("float32"), 
-                                    meta, use_std=True, k_std=kstd)
+                                    meta, 
+                                    use_std=True,
+                                    lat_grid=lat_grid)
         
         rain_map_cor = rain_map_cor.where(corr_wet == 1, 0.0)
     # smoothing
-    rain_smooth = smooth_da_mean(rain_map_cor, win=win_smooth)
-    return rain_smooth, rain_map
+    # rain_smooth = smooth_da_mean(rain_map_cor, win=win_smooth)
+    return rain_map_cor,  rain_map, #rain_smooth,
 
 # -------------------------
 # OPEN + REPROJECT + CLIP + INTERP (per day)
@@ -513,7 +568,7 @@ bt_all  = sorted(list_nc(path_to_msg_ir_fls))
 clm_all = sorted(list_nc(path_to_msg_clm_fls))
 
 # choose your operational period (example: Sep–Dec 2025)
-days = pd.date_range("2025-09-06", "2025-12-05", freq="D")
+days = pd.date_range("2025-09-01", "2025-12-31", freq="D")
 
 for day in days:
     day_str = day.strftime("%Y-%m-%d")
