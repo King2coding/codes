@@ -18,7 +18,9 @@ import rioxarray
 imerg_dir = '/home/kkumah/Projects/cml-stuff/satellite_data/imergv07/data'
 era5_dir = '/home/kkumah/Projects/cml-stuff/satellite_data/era5'
 cml_sat_15min_dir = '/home/kkumah/Projects/cml-stuff/out_15min_cml_rain_oper'
-cml_sat_daily_dir = r'/home/kkumah/Projects/cml-stuff/out_rain_trials/out_daily'
+cml_sat_daily_dir = r'/home/kkumah/Projects/cml-stuff/out_rain_trials/out_daily_no_smooth_strict_lat_params'
+# r'/home/kkumah/Projects/cml-stuff/out_rain_trials/out_daily'
+gauge_dirv = r'/home/kkumah/Projects/cml-stuff/gauge-data'
 # '/home/kkumah/Projects/cml-stuff/out_daily_cml_rain_oper' 
 
 plot_dir = '/home/kkumah/Projects/cml-stuff/plots'
@@ -134,7 +136,6 @@ def process_imerg(files, product):
 
     return imerg_xarr_hh_data, imerg_dd_precip
 
-
 def _standardize_latlon_names(da):
     """Rename common lat/lon variants to x/y for rioxarray."""
     rename_map = {}
@@ -154,13 +155,11 @@ def _standardize_latlon_names(da):
 
     return da
 
-
 def _ensure_crs(da, crs="EPSG:4326"):
     """Ensure CRS exists."""
     if not da.rio.crs:
         da = da.rio.write_crs(crs, inplace=False)
     return da
-
 
 def _ensure_monotonic_coords(da):
     """Ensure lat decreases north→south and lon increases west→east."""
@@ -169,7 +168,6 @@ def _ensure_monotonic_coords(da):
     if da.x[0] > da.x[-1]:
         da = da.sortby("x", ascending=True)
     return da
-
 
 def harmonize_to_era5(
     source_da: xr.DataArray,
@@ -398,7 +396,6 @@ def plot_precip_1x2_compare_ghana(
 
     return fig, axs
 
-
 def open_daily_with_time(fname):
     """
     Open a daily CML-SAT file that lacks a time dimension,
@@ -425,7 +422,6 @@ def open_daily_with_time(fname):
     })
 
     return ds
-
 
 def plot_latitude_profiles(
     imerg_da,
@@ -532,7 +528,6 @@ def plot_latitude_profiles(
 
     plt.tight_layout()
     plt.show()
-
 
 #%% Main processing
 # 1) Read and preprocess IMERG data day by day
@@ -709,19 +704,20 @@ fig, axs = plot_precip_1x2_compare_ghana(
     lats=imerg_ghana_2dmean.latitude.values,
     titles=["IMERG", "ERA5", "CML-SAT"],
     vmin=0,
-    vmax=7
+    vmax=15
 )
+gc.collect()
 
 # 2) b) Spatial mean maps
 fig, axs = plot_precip_1x2_compare_ghana(
-    da_list=[imerg_daily_agg.sel(time='2025-09-20'), 
-             era5_daily_data.sel(time='2025-09-20'), 
-             cml_sat_daily_agg.sel(time='2025-09-20')],
+    da_list=[imerg_daily_agg.sel(time='2025-09-03'), 
+             era5_daily_data.sel(time='2025-09-03'), 
+             cml_sat_daily_agg.sel(time='2025-09-03')],
     lons=imerg_ghana_2dmean.longitude.values,
     lats=imerg_ghana_2dmean.latitude.values,
     titles=["IMERG", "ERA5", "CML-SAT"],
     vmin=0,
-    vmax=18
+    vmax=40
 )
 
 gc.collect()
@@ -818,7 +814,6 @@ fig, axs = plt.subplots(1, 3, figsize=(15, 5), dpi=140)
 # Define hemisphere axis limits
 xlims = (0., 20)
 ylims = (0., 20)
-
 
 plots = [
     (axs[0], imerg_ghana_mean, cml_sat_ghana_mean, 'k', 'CML-SAT vs IMERG', xlims, ylims),
@@ -1152,3 +1147,359 @@ def make_cat_performance_diagram(cat_df_res):
 make_cat_performance_diagram(cat_df_imerg_obs)
 
 make_cat_performance_diagram(cat_df_era5_obs)
+
+
+#%%
+def kstd_by_lat(lat):
+    lat = np.asarray(lat)
+    k = np.zeros_like(lat, dtype="float32")
+    k = np.where(lat < 5, 0.85, k)
+    k = np.where((lat >= 5) & (lat < 8), 0.92, k)
+    k = np.where(lat >= 8, 0.95, k)
+    return k
+
+def kstd_by_lat_xr(lat_da):
+    """
+    lat_da: xarray.DataArray
+        1D (y) or 2D (y, x) latitude field
+    Returns
+    -------
+    kstd : xarray.DataArray
+        Same shape as lat_da
+    """
+
+    # start with zeros, preserve coords & dims
+    k = xr.zeros_like(lat_da, dtype="float32")
+
+    # coastal
+    k = k.where(lat_da < 5, 0.85)
+
+    # forest / transition
+    k = k.where(~((lat_da >= 5) & (lat_da < 8)), 0.92)
+
+    # savanna
+    k = k.where(lat_da >= 8, 0.95)
+
+    return k
+
+lat_grid = cml_sat_xarr["y"].broadcast_like(cml_sat_xarr["rain_daily_total"][0])
+kstd_grid = kstd_by_lat_xr(lat_grid)
+
+kstd_smooth = (
+    kstd_grid
+    .rolling(y=5, center=True, min_periods=1)
+    .mean()
+)
+
+cml = xr.open_dataset(r'/home/kkumah/Projects/cml-stuff/out_rain_trials/out_daily/CML-SAT_Rainfall_Estimates_Daily_V1_20250903.nc')
+# img = xr.open_dataset(r'/home/kkumah/Projects/cml-stuff/satellite_data/imergv07/data/')
+import cartopy.feature as cfeature
+import cartopy.crs as ccrs
+# define ax etc
+
+# plot
+fig, ax = plt.subplots(subplot_kw={'projection': ccrs.PlateCarree()})
+cml['rain_daily_total'].plot(ax=ax, vmin=0, vmax=50, cmap='Spectral_r', robust=True)
+# add borader using cartopy
+ax.coastlines()
+# ax.add_feature(cfeature.LAND)
+# ax.add_feature(cfeature.OCEAN)
+ax.add_feature(cfeature.LAKES)
+# ax.add_feature(cfeature.RIVERS)
+ax.add_feature(cfeature.BORDERS)
+# ax.add_feature(cfeature.STATES)
+# ax.add_feature(cfeature.COASTLINE)
+
+# %% The gauge evaluation
+all_gauges_files = [os.path.join(gauge_dirv, f) for f in os.listdir(gauge_dirv) if f.endswith('.csv')]
+sheet = "Jan-2023 - Jan-2021"  # or whichever one you want; they share the same station list
+
+station_meta = pd.read_excel(os.path.join(gauge_dirv, 'Gold Standard.xlsx'),
+                             sheet_name=sheet, header=None)
+station_meta.columns = ["station_id", "cc", "lat", "lon", "n_total", "n_valid", "n_total2"]
+
+# Ghana stations only
+station_meta = station_meta[station_meta["cc"] == "GH"].copy()
+station_meta.set_index("station_id", inplace=True)
+
+ids = [os.path.splitext(os.path.basename(f))[0] for f in all_gauges_files]
+sub = station_meta[station_meta.index.isin(ids)].copy()
+sub.shape
+
+
+def read_gauge_daily(fp):
+    sid = os.path.splitext(os.path.basename(fp))[0]
+
+    df = pd.read_csv(fp, parse_dates=["Timestamp"])
+    df = df.set_index("Timestamp")
+
+    # rainfall column
+    pr = df["pr"].astype(float)
+
+    daily = pr.resample("D").sum(min_count=1)
+    daily.name = sid
+    return daily
+
+#-------------------------
+def extract_point_daily(da, lat, lon):
+    """
+    da: xarray DataArray (time, y, x)
+    returns pandas Series indexed by time
+    """
+    return (
+        da
+        .sel(latitude=lat, longitude=lon, method="nearest")
+        .to_series()
+    )
+# -------------------------
+
+# build daily gauge dataframe
+daily_gauges = []
+for fp in all_gauges_files:
+    sid = os.path.splitext(os.path.basename(fp))[0]
+    if sid in sub.index:
+        daily_gauges.append(read_gauge_daily(fp))
+
+gauge_daily_df = pd.concat(daily_gauges, axis=1)
+
+#-------------------------
+records = []
+
+for sid, row in sub.iterrows():
+    lat, lon = row["lat"], row["lon"]
+
+    # gauge daily
+    g = gauge_daily_df[sid].dropna()
+
+    # products
+    cml   = extract_point_daily(cml_sat_daily_agg, lat, lon)
+    imerg = extract_point_daily(imerg_daily_agg, lat, lon)
+    era5  = extract_point_daily(era5_daily_data, lat, lon)
+
+    df = pd.concat(
+        [g, cml, imerg, era5],
+        axis=1,
+        keys=["gauge", "cml_sat", "imerg", "era5"]
+    ).dropna()
+
+    df["station"] = sid
+    records.append(df.reset_index())
+
+compare_df = pd.concat(records, ignore_index=True)
+# Ensure numeric
+for c in ["gauge", "cml_sat", "imerg", "era5"]:
+    compare_df[c] = pd.to_numeric(compare_df[c], errors="coerce")
+#-------------------------
+def compute_metrics(x, y):
+    mask = np.isfinite(x) & np.isfinite(y)
+    x = x[mask]
+    y = y[mask]
+
+    if len(x) < 2:
+        return np.nan, np.nan, np.nan
+
+    corr = np.corrcoef(x, y)[0, 1]
+    bias = (y.mean() / x.mean()) - 1
+    rmse = np.sqrt(np.mean((y - x) ** 2))
+
+    return corr, bias, rmse
+
+import matplotlib.pyplot as plt
+import gc
+
+fig, axs = plt.subplots(1, 3, figsize=(15, 5), dpi=140)
+
+xlims = (0., 40.)
+ylims = (0., 40.)
+ticks = np.arange(0, 41, 10)
+
+plots = [
+    (axs[0], compare_df["gauge"], compare_df["cml_sat"], "CML-SAT vs Gauge"),
+    (axs[1], compare_df["gauge"], compare_df["imerg"],  "IMERG vs Gauge"),
+    (axs[2], compare_df["gauge"], compare_df["era5"],   "ERA5 vs Gauge"),
+]
+
+for ax, x, y, title in plots:
+
+    # limits & ticks
+    ax.set_xlim(xlims)
+    ax.set_ylim(ylims)
+    ax.set_xticks(ticks)
+    ax.set_yticks(ticks)
+
+    # scatter
+    ax.scatter(
+        x, y,
+        s=45, color="k", edgecolor="black", alpha=0.85
+    )
+
+    # 1:1 line
+    ax.plot(
+        [xlims[0], xlims[1]],
+        [ylims[0], ylims[1]],
+        "k--", lw=1.5
+    )
+
+    # regression line
+    slope, intercept, mask = add_regression_line(ax, x, y, "k", xlims)
+
+    # metrics
+    corr, bias, rmse = compute_metrics(x.values, y.values)
+
+    eq_text = f"y = {slope:.2f}x + {intercept:.2f}"
+
+    metrics_text = (
+        f"Corr = {corr:.2f}\n"
+        f"Bias = {bias:.1%}\n"
+        f"RMSE = {rmse:.2f}\n"
+        f"{eq_text}\n"
+        "--  1:1 line\n"
+        "—   Regression line"
+    )
+
+    ax.text(
+        0.03, 0.97,
+        metrics_text,
+        transform=ax.transAxes,
+        fontsize=13,
+        fontweight="bold",
+        va="top", ha="left",
+        bbox=dict(facecolor="white", alpha=0.6, edgecolor="none")
+    )
+
+    # cosmetics
+    ax.set_title(title, fontsize=15, fontweight="bold")
+    ax.minorticks_on()
+    ax.tick_params(axis="both", which="major", labelsize=14, length=7, direction="in")
+    ax.tick_params(axis="both", which="minor", length=4, direction="in")
+    ax.grid(which="major", linestyle="--", linewidth=0.6, color="grey")
+
+# axis labels
+axs[0].set_xlabel("Gauge [mm/day]", fontsize=15)
+axs[1].set_xlabel("Gauge [mm/day]", fontsize=15)
+axs[2].set_xlabel("Gauge [mm/day]", fontsize=15)
+
+axs[0].set_ylabel("CML-SAT [mm/day]", fontsize=15)
+axs[1].set_ylabel("IMERG [mm/day]", fontsize=15)
+axs[2].set_ylabel("ERA5 [mm/day]", fontsize=15)
+
+plt.tight_layout()
+plt.show()
+gc.collect()
+
+#-------------------------
+from sklearn.metrics import confusion_matrix
+
+def categorical_stats(forecast, observation, thr=1.0):
+    f = forecast >= thr
+    o = observation >= thr
+
+    tn, fp, fn, tp = confusion_matrix(o, f).ravel()
+
+    POD  = tp / (tp + fn) if (tp + fn) else np.nan
+    FAR  = fp / (tp + fp) if (tp + fp) else np.nan
+    CSI  = tp / (tp + fn + fp) if (tp + fn + fp) else np.nan
+    Bias = (tp + fp) / (tp + fn) if (tp + fn) else np.nan
+
+    return dict(POD=POD, FAR=FAR, CSI=CSI, Bias=Bias)
+
+cat = {}
+for prod in ["cml_sat", "imerg", "era5"]:
+    cat[prod] = categorical_stats(
+        compare_df[prod].values,
+        compare_df["gauge"].values,
+        thr=1.0
+    )
+
+cat_stats_at_gauge = pd.DataFrame(cat)
+cat_stats_at_gauge.columns = ["CML-SAT", "IMERG", "ERA5"]
+make_cat_performance_diagram(cat_stats_at_gauge)
+
+#-------------------------
+df_mean = (
+    compare_df.copy()
+    .groupby("station")[["gauge", "cml_sat", "imerg", "era5"]]
+    .mean()
+    .reset_index()
+)
+
+df_mean
+
+fig, axs = plt.subplots(1, 3, figsize=(15, 5), dpi=140)
+
+xlims = (0., 15.)
+ylims = (0., 15.)
+ticks = np.arange(0, 16, 3)
+
+plots = [
+    (axs[0], df_mean["gauge"], df_mean["cml_sat"], "CML-SAT vs Gauge (Mean Daily)"),
+    (axs[1], df_mean["gauge"], df_mean["imerg"],  "IMERG vs Gauge (Mean Daily)"),
+    (axs[2], df_mean["gauge"], df_mean["era5"],   "ERA5 vs Gauge (Mean Daily)"),
+]
+
+for ax, x, y, title in plots:
+
+    ax.set_xlim(xlims)
+    ax.set_ylim(ylims)
+    ax.set_xticks(ticks)
+    ax.set_yticks(ticks)
+
+    # scatter (36 points)
+    ax.scatter(
+        x, y,
+        s=80, color="k", edgecolor="black", alpha=0.9
+    )
+
+    # 1:1 line
+    ax.plot(
+        [xlims[0], xlims[1]],
+        [ylims[0], ylims[1]],
+        "k--", lw=1.5
+    )
+
+    # regression
+    slope, intercept, mask = add_regression_line(ax, x, y, "k", xlims)
+
+    # metrics
+    corr, bias, rmse = compute_metrics(x.values, y.values)
+
+    eq_text = f"y = {slope:.2f}x + {intercept:.2f}"
+
+    metrics_text = (
+        f"Corr = {corr:.2f}\n"
+        f"Bias = {bias:.1%}\n"
+        f"RMSE = {rmse:.2f}\n"
+        f"{eq_text}\n"
+        "--  1:1 line\n"
+        "—   Regression line"
+    )
+
+    ax.text(
+        0.03, 0.97,
+        metrics_text,
+        transform=ax.transAxes,
+        fontsize=13,
+        fontweight="bold",
+        va="top", ha="left",
+        bbox=dict(facecolor="white", alpha=0.6, edgecolor="none")
+    )
+
+    ax.set_title(title, fontsize=15, fontweight="bold")
+    ax.minorticks_on()
+    ax.tick_params(axis="both", which="major", labelsize=14, length=7, direction="in")
+    ax.tick_params(axis="both", which="minor", length=4, direction="in")
+    ax.grid(which="major", linestyle="--", linewidth=0.6, color="grey")
+
+axs[0].set_xlabel("Gauge mean [mm/day]", fontsize=15)
+axs[1].set_xlabel("Gauge mean [mm/day]", fontsize=15)
+axs[2].set_xlabel("Gauge mean [mm/day]", fontsize=15)
+
+axs[0].set_ylabel("CML-SAT mean [mm/day]", fontsize=15)
+axs[1].set_ylabel("IMERG mean [mm/day]", fontsize=15)
+axs[2].set_ylabel("ERA5 mean [mm/day]", fontsize=15)
+
+plt.tight_layout()
+plt.show()
+#-------------------------
+# gg = pd.read_csv(os.path.join(gauge_dirv, 'TA00010.csv'))
+# gg.head(5)

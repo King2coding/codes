@@ -28,7 +28,8 @@ path_to_msg_ir_fls = r'/home/kkumah/Projects/cml-stuff/satellite_data/msg_val'
 path_to_msg_clm_fls = r'/home/kkumah/Projects/cml-stuff/satellite_data/msg_clm_val'
 path_to_put_15min_cml_rainfall_estimates = r'/home/kkumah/Projects/cml-stuff/out_rain_trials/out_15min'
 # r'/home/kkumah/Projects/cml-stuff/out_15min_cml_rain_oper'
-path_to_put_daily_cml_rainfall_estimates = r'/home/kkumah/Projects/cml-stuff/out_rain_trials/out_daily'
+path_to_put_daily_cml_rainfall_estimates = r'/home/kkumah/Projects/cml-stuff/out_rain_trials/out_daily_no_smooth_strict_lat_params'
+# r'/home/kkumah/Projects/cml-stuff/out_rain_trials/out_daily'
 # r'/home/kkumah/Projects/cml-stuff/out_daily_cml_rain_oper'
 
 LOG_DIR = Path("/home/kkumah/Projects/cml-stuff/out_logs")
@@ -213,17 +214,37 @@ def kstd_by_lat(lat):
     k = np.zeros_like(lat, dtype="float32")
 
     # coastal → forest
-    k = np.where(lat < 5.5, 0.4, k)
-    k = np.where((lat >= 5.5) & (lat < 7.5),
-                 0.6 + (lat - 5.5) * (0.6 - 0.3) / (7.5 - 5.5),
-                 k)
+    k = np.where(lat < 5, 0.85, k)
+    k = np.where((lat >= 5) & (lat < 8), 0.92, k)
 
     # forest → savanna
-    k = np.where((lat >= 7.5) & (lat < 9.5),
-                 0.9 + (lat - 7.5) * (0.9 - 0.6) / (9.5 - 7.5),
-                 k)
+    k = np.where((lat >= 8), 0.95, k)     
+    return k
 
-    k = np.where(lat >= 9.5, 1.3, k)
+def kstd_by_lat_xr(lat_da):
+    """
+    lat_da: xarray.DataArray
+        1D (y) or 2D (y, x) latitude field
+    Returns
+    -------
+    kstd : xarray.DataArray
+        Same shape as lat_da
+    """
+
+    # start with zeros, preserve coords & dims
+    k = xr.zeros_like(lat_da, dtype="float32")
+
+    # coastal
+    k = k.where(lat_da < 5, 0.87)
+
+    # forest / transition
+    k = k.where(~((lat_da >= 5) & (lat_da < 8)), 0.95)
+
+    # savanna and beyond
+    k = k.where((lat_da >= 8) & (lat_da < 10), 1)
+
+    k = k.where(lat_da >= 10, 1.2)
+
     return k
 
 def correct_wet_mask(bin_rast, 
@@ -243,7 +264,7 @@ def correct_wet_mask(bin_rast,
     # choose threshold: mean only (old) or mean + k_std*std
     if use_std:
         
-        kstd_grid = kstd_by_lat(lat_grid)
+        kstd_grid = lat_grid#kstd_by_lat(lat_grid)
 
         thr = mean_r - (kstd_grid * std_r)
         # thr = mean_r - (k_std * std_r)
@@ -277,11 +298,11 @@ def xarray_meta_from_da(da):
 def predict_slice_meanq(time_val, 
                         BT_IR108, BT_IR120, BT_WV062, BT_diff,
                         mask_cloud,
-                        win_smooth=2, 
+                        win_smooth,
                         apply_patch=True,
-                        drizzle_floor=0.10, 
+                        drizzle_floor=None, 
                         use_trimmed=False, 
-                        kstd=0.7,):
+                        ):
     # --- gather features ---
     b1 = BT_IR108.sel(time=time_val).where(mask_cloud.sel(time=time_val))
     b2 = BT_IR120.sel(time=time_val).where(mask_cloud.sel(time=time_val))
@@ -323,21 +344,29 @@ def predict_slice_meanq(time_val,
     # drizzle filter then smoothing
     if drizzle_floor is not None:
         rain_map.values = np.where(rain_map.values < drizzle_floor, 0.0, rain_map.values)
-    if win_smooth and win_smooth > 1:
+    if (win_smooth[0] == "Yes") and (win_smooth > 1):
         rain_map = smooth_da_mean(rain_map, win=win_smooth)
 
     rain_map_cor = rain_map.copy()
 
     # optional patch correction by IR108
     if apply_patch:
-        lat_grid = np.repeat(b1["y"].values[:, None], b1.sizes["x"], axis=1)
+        # lat_grid = np.repeat(b1["y"].values[:, None], b1.sizes["x"], axis=1)
+        lat_grid = b1["y"].broadcast_like(b1)
+        kstd_grid = kstd_by_lat_xr(lat_grid)
+
+        kstd_smooth = (
+            kstd_grid
+            .rolling(y=5, center=True, min_periods=1)
+            .mean()
+        )
         meta = xarray_meta_from_da(b1)
         wet_grid = (rain_map.values > 0).astype(np.int16)
         corr_wet = correct_wet_mask(wet_grid, 
                                     b1.values.astype("float32"), 
                                     meta, 
                                     use_std=True,
-                                    lat_grid=lat_grid)
+                                    lat_grid=kstd_smooth)
         
         rain_map_cor = rain_map_cor.where(corr_wet == 1, 0.0)
     # smoothing
@@ -439,7 +468,8 @@ def open_and_prepare_msg_day(day_str,
 # PREDICT 15-MIN FOR A DAY
 # -------------------------
 def predict_day_15min(msg_bt_ll, msg_clm_ll, *,
-                      win_smooth=3, apply_patch=True, drizzle_floor=0.10, kstd=0.7):
+                      win_smooth=('No', 3), apply_patch=True, 
+                      drizzle_floor):
     # build masks & features (same as your draft)
     ds_bt = msg_bt_ll.copy()
     for v in BT_VARS:
@@ -466,8 +496,7 @@ def predict_day_15min(msg_bt_ll, msg_clm_ll, *,
         mask_cloud=mask_cloud,
         win_smooth=win_smooth,
         apply_patch=apply_patch,
-        drizzle_floor=drizzle_floor,
-        kstd=kstd,
+        drizzle_floor=drizzle_floor,        
         )
         preds.append(p_corr)
 
@@ -487,6 +516,7 @@ def predict_day_15min(msg_bt_ll, msg_clm_ll, *,
 # -------------------------
 def daily_total_from_15min(R15):
     Rd = R15.mean("time") * 24.0
+    # Rd = (R15 * 0.25).sum("time", skipna=True)
     Rd.name = "rain_daily_total"
     Rd.attrs["units"] = "mm day-1"
     Rd.attrs["long_name"] = "Daily total rainfall (mean rate × 24)"
@@ -568,7 +598,7 @@ bt_all  = sorted(list_nc(path_to_msg_ir_fls))
 clm_all = sorted(list_nc(path_to_msg_clm_fls))
 
 # choose your operational period (example: Sep–Dec 2025)
-days = pd.date_range("2025-09-01", "2025-12-31", freq="D")
+days = pd.date_range("2025-09-03", "2025-12-31", freq="D")
 
 for day in days:
     day_str = day.strftime("%Y-%m-%d")
@@ -593,10 +623,10 @@ for day in days:
         continue
 
     R15 = predict_day_15min(msg_bt_ll, msg_clm_ll,
-                            win_smooth=3, 
+                            win_smooth=('No', 3), 
                             apply_patch=True, 
-                            drizzle_floor=0.05, 
-                            kstd=0.92)
+                            drizzle_floor=None, 
+                            )
 
     Rd = daily_total_from_15min(R15)
 
@@ -631,7 +661,7 @@ for day in days:
 
 # da = Rd  # your DataArray (y=lat, x=lon)
 # da = da.sortby("y")  # safety: ensures south->north increasing
-# daily_bins = np.arange(0,22,2.5)
+# daily_bins = np.arange(0,45,5)
 # # [
 # #     0,   1,   2,   5,   10,
 # #     20,  30,  40
