@@ -704,20 +704,20 @@ fig, axs = plot_precip_1x2_compare_ghana(
     lats=imerg_ghana_2dmean.latitude.values,
     titles=["IMERG", "ERA5", "CML-SAT"],
     vmin=0,
-    vmax=15
+    vmax=5
 )
 gc.collect()
 
 # 2) b) Spatial mean maps
 fig, axs = plot_precip_1x2_compare_ghana(
-    da_list=[imerg_daily_agg.sel(time='2025-09-03'), 
-             era5_daily_data.sel(time='2025-09-03'), 
-             cml_sat_daily_agg.sel(time='2025-09-03')],
+    da_list=[imerg_daily_agg.sel(time='2025-09-20'), 
+             era5_daily_data.sel(time='2025-09-20'), 
+             cml_sat_daily_agg.sel(time='2025-09-20')],
     lons=imerg_ghana_2dmean.longitude.values,
     lats=imerg_ghana_2dmean.latitude.values,
     titles=["IMERG", "ERA5", "CML-SAT"],
     vmin=0,
-    vmax=40
+    vmax=15
 )
 
 gc.collect()

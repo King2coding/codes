@@ -238,12 +238,14 @@ def kstd_by_lat_xr(lat_da):
     k = k.where(lat_da < 5, 0.87)
 
     # forest / transition
-    k = k.where(~((lat_da >= 5) & (lat_da < 8)), 0.95)
+    k = k.where(~((lat_da >= 5) & (lat_da < 8)), 0.93)
 
     # savanna and beyond
-    k = k.where((lat_da >= 8) & (lat_da < 10), 1)
+    k = k.where((lat_da >= 8) & (lat_da < 9), 1)
 
-    k = k.where(lat_da >= 10, 1.2)
+    k = k.where((lat_da >= 9) & (lat_da < 10), 1.2)
+
+    k = k.where(lat_da >= 10, 1.35)
 
     return k
 
@@ -300,7 +302,7 @@ def predict_slice_meanq(time_val,
                         mask_cloud,
                         win_smooth,
                         apply_patch=True,
-                        drizzle_floor=None, 
+                        drizzle_floor=0.05, 
                         use_trimmed=False, 
                         ):
     # --- gather features ---
@@ -625,7 +627,7 @@ for day in days:
     R15 = predict_day_15min(msg_bt_ll, msg_clm_ll,
                             win_smooth=('No', 3), 
                             apply_patch=True, 
-                            drizzle_floor=None, 
+                            drizzle_floor=0.05, 
                             )
 
     Rd = daily_total_from_15min(R15)
