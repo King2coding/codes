@@ -167,6 +167,7 @@ def _ensure_monotonic_coords(da):
         da = da.sortby("y", ascending=False)
     if da.x[0] > da.x[-1]:
         da = da.sortby("x", ascending=True)
+
     return da
 
 def harmonize_to_era5(
@@ -200,6 +201,39 @@ def harmonize_to_era5(
     src_on_era5 = src_on_era5.rename({"y": "latitude", "x": "longitude"})
 
     return src_on_era5
+
+def harmonize_to_era5_v2(
+    source_da: xr.DataArray,
+    era5_da: xr.DataArray,
+    method="average",   # average is correct for precipitation
+):
+    """
+    Harmonize a source DataArray (e.g. IMERG) onto ERA5 grid.
+    """
+
+    # --- Standardize dimension names
+    src = _standardize_latlon_names(source_da)
+    tgt = _standardize_latlon_names(era5_da)
+
+    # --- CRS
+    src = _ensure_crs(src)
+    tgt = _ensure_crs(tgt)
+
+    # --- Coordinate sanity
+    # src = _ensure_monotonic_coords(src)
+    # tgt = _ensure_monotonic_coords(tgt)
+
+    # --- Match grid (reprojection needed)
+    
+    src_on_era5 = src.rio.reproject(src.rio.crs, 
+                        shape=tgt.shape[1:],  # set the shape as the ERA5 data
+                        resampling=Resampling.nearest,)
+
+    # --- Restore conventional names
+    src_on_era5 = src_on_era5.rename({"y": "latitude", "x": "longitude"})
+
+    return src_on_era5
+
 
 def compute_pdf_elements_from_array(data_array, bins):
     """
@@ -541,7 +575,6 @@ for day in days:
 
 imerg_daily_xarr = xr.concat(daily_xr, dim="time")
 
-
 # 2) Read and preprocess ERA5 data
 # era5_data = xr.open_dataset(era5_file)
 # era5_data = era5_data.rename({'valid_time': 'time'})
@@ -560,7 +593,7 @@ era5_daily_data = (
 )
 
 # 3) Harmonize IMERG data to ERA5 grid
-imerg_daily_agg = harmonize_to_era5(
+imerg_daily_agg = harmonize_to_era5_v2(
     imerg_daily_xarr,
     era5_daily_data,
 )
@@ -575,7 +608,7 @@ cml_sat_xarr = xr.concat(
     compat="override"
 )
 
-cml_sat_daily_agg = harmonize_to_era5(
+cml_sat_daily_agg = harmonize_to_era5_v2(
     cml_sat_xarr['rain_daily_total'],
     era5_daily_data,
 )
@@ -618,7 +651,7 @@ cml_sat_ghana_mean = cml_sat_daily_agg.mean(dim=['latitude', 'longitude'])
 # b) Spatial mean: 2d array
 imerg_ghana_2dmean = imerg_daily_agg.mean(dim='time')
 era5_ghana_2dmean = era5_daily_data.mean(dim='time')
-cml_sat_ghana_2dmean = cml_sat_daily_agg.mean(dim='time')
+cml_sat_ghana_2dmean = cml_sat_daily_agg.mean(dim='time', skipna=True)
 
 # c) zonal latitudinal mean
 imerg_ghana_zonalmean = imerg_daily_agg.mean(dim=['time', 'longitude'])
@@ -704,29 +737,29 @@ fig, axs = plot_precip_1x2_compare_ghana(
     lats=imerg_ghana_2dmean.latitude.values,
     titles=["IMERG", "ERA5", "CML-SAT"],
     vmin=0,
-    vmax=5
+    vmax=8
 )
 gc.collect()
 
 # 2) b) Spatial mean maps
 fig, axs = plot_precip_1x2_compare_ghana(
-    da_list=[imerg_daily_agg.sel(time='2025-09-20'), 
-             era5_daily_data.sel(time='2025-09-20'), 
-             cml_sat_daily_agg.sel(time='2025-09-20')],
+    da_list=[imerg_daily_agg.sel(time='2025-09-03'), 
+             era5_daily_data.sel(time='2025-09-03'), 
+             cml_sat_daily_agg.sel(time='2025-09-03')],
     lons=imerg_ghana_2dmean.longitude.values,
     lats=imerg_ghana_2dmean.latitude.values,
     titles=["IMERG", "ERA5", "CML-SAT"],
     vmin=0,
-    vmax=15
+    vmax=35
 )
 
 gc.collect()
 
 # 2) c) Zonal mean plots
 plot_latitude_profiles(
-    imerg_ghana_zonalmean,   # your IMERG 1D DataArray
-    era5_ghana_zonalmean,    # your ERA5 1D DataArray
-    cml_sat_ghana_zonalmean, # your CML-SAT 1D DataArray
+    imerg_ghana_zonalmean,   #  IMERG 1D DataArray
+    era5_ghana_zonalmean,    #  ERA5 1D DataArray
+    cml_sat_ghana_zonalmean, #  CML-SAT 1D DataArray
     xlim=(0, 8),
     title="Latitudinal Mean Rainfall"
 )
@@ -1211,30 +1244,30 @@ ax.add_feature(cfeature.BORDERS)
 # ax.add_feature(cfeature.COASTLINE)
 
 # %% The gauge evaluation
-all_gauges_files = [os.path.join(gauge_dirv, f) for f in os.listdir(gauge_dirv) if f.endswith('.csv')]
+all_gauges_files = [os.path.join(gauge_dirv, f) for f in os.listdir(gauge_dirv) if (f.endswith('.csv') and f.startswith('TA'))]
 sheet = "Jan-2023 - Jan-2021"  # or whichever one you want; they share the same station list
 
-station_meta = pd.read_excel(os.path.join(gauge_dirv, 'Gold Standard.xlsx'),
-                             sheet_name=sheet, header=None)
-station_meta.columns = ["station_id", "cc", "lat", "lon", "n_total", "n_valid", "n_total2"]
+station_meta = pd.read_csv(os.path.join(gauge_dirv, 'stations_metadata.csv'),)
+# station_meta.columns = ["station_id", "cc", "lat", "lon", "n_total", "n_valid", "n_total2"]
 
 # Ghana stations only
-station_meta = station_meta[station_meta["cc"] == "GH"].copy()
-station_meta.set_index("station_id", inplace=True)
+# station_meta = station_meta[station_meta["cc"] == "GH"].copy()
+# station_meta.set_index("station_id", inplace=True)
 
-ids = [os.path.splitext(os.path.basename(f))[0] for f in all_gauges_files]
-sub = station_meta[station_meta.index.isin(ids)].copy()
-sub.shape
+# ids = [os.path.splitext(os.path.basename(f))[0] for f in all_gauges_files]
+# sub = station_meta[station_meta.index.isin(ids)].copy()
+# sub.shape
 
 
 def read_gauge_daily(fp):
     sid = os.path.splitext(os.path.basename(fp))[0]
 
-    df = pd.read_csv(fp, parse_dates=["Timestamp"])
-    df = df.set_index("Timestamp")
+    df = pd.read_csv(fp, parse_dates=["timestamp"])
+    df = df.set_index("timestamp")
 
     # rainfall column
-    pr = df["pr"].astype(float)
+    r_cl = [c for c in df.columns if c.startswith("pr")][0]
+    pr = df[r_cl].astype(float)
 
     daily = pr.resample("D").sum(min_count=1)
     daily.name = sid
@@ -1256,39 +1289,47 @@ def extract_point_daily(da, lat, lon):
 # build daily gauge dataframe
 daily_gauges = []
 for fp in all_gauges_files:
-    sid = os.path.splitext(os.path.basename(fp))[0]
-    if sid in sub.index:
-        daily_gauges.append(read_gauge_daily(fp))
+    # sid = os.path.splitext(os.path.basename(fp))[0]
+    # if sid in sub.index:
+    daily_gauges.append(read_gauge_daily(fp))
 
 gauge_daily_df = pd.concat(daily_gauges, axis=1)
 
 #-------------------------
 records = []
 
-for sid, row in sub.iterrows():
-    lat, lon = row["lat"], row["lon"]
+for sid, row in station_meta.iterrows():
+    lat, lon = row["latitude"], row["longitude"]
 
     # gauge daily
-    g = gauge_daily_df[sid].dropna()
+    g = gauge_daily_df[row['station code']].dropna()
 
     # products
-    cml   = extract_point_daily(cml_sat_daily_agg, lat, lon)
-    imerg = extract_point_daily(imerg_daily_agg, lat, lon)
-    era5  = extract_point_daily(era5_daily_data, lat, lon)
+    cml   = pd.DataFrame(extract_point_daily(cml_sat_daily_agg, lat, lon))
+    imerg = pd.DataFrame(extract_point_daily(imerg_daily_agg, lat, lon))
+    era5  = pd.DataFrame(extract_point_daily(era5_daily_data, lat, lon))
 
-    df = pd.concat(
-        [g, cml, imerg, era5],
-        axis=1,
-        keys=["gauge", "cml_sat", "imerg", "era5"]
-    ).dropna()
+    df_merg = pd.merge(g, cml, how="left", left_index=True, right_index=True)
+    df_merg = pd.merge(df_merg, imerg, how="left", left_index=True, right_index=True)
+    df_merg = pd.merge(df_merg, era5, how="left", left_index=True, right_index=True)
 
-    df["station"] = sid
-    records.append(df.reset_index())
+    df_merg = df_merg.dropna(axis=0)
+    df_merg.columns = ["gauge", "cml_sat", "imerg", "era5"]
+
+    # df = pd.concat(
+    #     [g, cml, imerg, era5],
+    #     axis=1,
+    #     keys=["gauge", "cml_sat", "imerg", "era5"]
+    # ).dropna()
+
+    df_merg["station"] = row['station code']
+    records.append(df_merg.reset_index())
 
 compare_df = pd.concat(records, ignore_index=True)
 # Ensure numeric
 for c in ["gauge", "cml_sat", "imerg", "era5"]:
     compare_df[c] = pd.to_numeric(compare_df[c], errors="coerce")
+
 #-------------------------
 def compute_metrics(x, y):
     mask = np.isfinite(x) & np.isfinite(y)

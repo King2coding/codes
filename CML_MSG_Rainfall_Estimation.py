@@ -235,17 +235,17 @@ def kstd_by_lat_xr(lat_da):
     k = xr.zeros_like(lat_da, dtype="float32")
 
     # coastal
-    k = k.where(lat_da < 5, 0.87)
+    k = k.where(lat_da < 5, 0.88)
 
     # forest / transition
-    k = k.where(~((lat_da >= 5) & (lat_da < 8)), 0.93)
+    k = k.where(~((lat_da >= 5) & (lat_da < 8)), 0.92)
 
     # savanna and beyond
-    k = k.where((lat_da >= 8) & (lat_da < 9), 1)
+    k = k.where((lat_da >= 8) & (lat_da < 9), 0.98)
 
-    k = k.where((lat_da >= 9) & (lat_da < 10), 1.2)
+    k = k.where((lat_da >= 9) & (lat_da < 10), 1.1)
 
-    k = k.where(lat_da >= 10, 1.35)
+    k = k.where(lat_da >= 10, 1.37)
 
     return k
 
