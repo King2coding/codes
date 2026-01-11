@@ -19,6 +19,7 @@ imerg_dir = '/home/kkumah/Projects/cml-stuff/satellite_data/imergv07/data'
 era5_dir = '/home/kkumah/Projects/cml-stuff/satellite_data/era5'
 cml_sat_15min_dir = '/home/kkumah/Projects/cml-stuff/out_15min_cml_rain_oper'
 cml_sat_daily_dir = r'/home/kkumah/Projects/cml-stuff/out_rain_trials/out_daily_no_smooth_strict_lat_params'
+# r'/home/kkumah/Projects/cml-stuff/out_rain_trials/out_daily_no_smooth_strict_lat_params'
 # r'/home/kkumah/Projects/cml-stuff/out_rain_trials/out_daily'
 gauge_dirv = r'/home/kkumah/Projects/cml-stuff/gauge-data'
 # '/home/kkumah/Projects/cml-stuff/out_daily_cml_rain_oper' 
@@ -33,7 +34,7 @@ all_cml_sat_files = sorted([os.path.join(cml_sat_daily_dir, f) for f in os.listd
 all_cml_sat_15min_files = sorted([os.path.join(cml_sat_15min_dir, f) for f in os.listdir(cml_sat_15min_dir) if f.endswith('.nc')])
 
 era5_file = os.path.join(era5_dir, 'ERA5_total_precipitation_2025_09_12_Ghana.nc')
-
+bbox = (-4.0, 1.25, 4.5, 11.25)
 cde_run_dte = datetime.today().strftime('%Y%m%d')
 
 days = pd.date_range("2025-09-01", "2025-12-29", freq="D")
@@ -606,7 +607,7 @@ cml_sat_xarr = xr.concat(
     dim="time",
     coords="minimal",
     compat="override"
-)
+).sel(y=slice(bbox[2], bbox[3]), x=slice(bbox[0], bbox[1]))
 
 cml_sat_daily_agg = harmonize_to_era5_v2(
     cml_sat_xarr['rain_daily_total'],
@@ -656,7 +657,7 @@ cml_sat_ghana_2dmean = cml_sat_daily_agg.mean(dim='time', skipna=True)
 # c) zonal latitudinal mean
 imerg_ghana_zonalmean = imerg_daily_agg.mean(dim=['time', 'longitude'])
 era5_ghana_zonalmean = era5_daily_data.mean(dim=['time', 'longitude'])
-cml_sat_ghana_zonalmean = cml_sat_daily_agg.mean(dim=['time', 'longitude'])
+cml_sat_ghana_zonalmean = cml_sat_daily_agg.mean(dim=['time', 'longitude'], skipna=True)
 # ---------------------
 # Their plotting
 # ---------------------
@@ -737,20 +738,20 @@ fig, axs = plot_precip_1x2_compare_ghana(
     lats=imerg_ghana_2dmean.latitude.values,
     titles=["IMERG", "ERA5", "CML-SAT"],
     vmin=0,
-    vmax=8
+    vmax=15
 )
 gc.collect()
 
 # 2) b) Spatial mean maps
 fig, axs = plot_precip_1x2_compare_ghana(
-    da_list=[imerg_daily_agg.sel(time='2025-09-03'), 
-             era5_daily_data.sel(time='2025-09-03'), 
-             cml_sat_daily_agg.sel(time='2025-09-03')],
+    da_list=[imerg_daily_agg.sel(time='2025-09-20'), 
+             era5_daily_data.sel(time='2025-09-20'), 
+             cml_sat_daily_agg.sel(time='2025-09-20')],
     lons=imerg_ghana_2dmean.longitude.values,
     lats=imerg_ghana_2dmean.latitude.values,
     titles=["IMERG", "ERA5", "CML-SAT"],
     vmin=0,
-    vmax=35
+    vmax=20
 )
 
 gc.collect()
@@ -760,7 +761,7 @@ plot_latitude_profiles(
     imerg_ghana_zonalmean,   #  IMERG 1D DataArray
     era5_ghana_zonalmean,    #  ERA5 1D DataArray
     cml_sat_ghana_zonalmean, #  CML-SAT 1D DataArray
-    xlim=(0, 8),
+    xlim=(0, 12),
     title="Latitudinal Mean Rainfall"
 )
 gc.collect()
@@ -1215,14 +1216,82 @@ def kstd_by_lat_xr(lat_da):
 
     return k
 
+def kstd_by_lat_xr(lat_da):
+
+    k = xr.full_like(lat_da, np.nan, dtype="float32")
+
+    k = k.where(lat_da >= 5, 0.85)                    # lat < 5
+    k = k.where(lat_da < 8, 0.92)                     # 5 ≤ lat < 8
+    k = k.where(lat_da < 1e9, 0.95)                   # lat ≥ 8
+
+    return k
+
 lat_grid = cml_sat_xarr["y"].broadcast_like(cml_sat_xarr["rain_daily_total"][0])
 kstd_grid = kstd_by_lat_xr(lat_grid)
 
-kstd_smooth = (
-    kstd_grid
-    .rolling(y=5, center=True, min_periods=1)
-    .mean()
-)
+def kstd_by_lat_xr(lat_da):
+
+    return xr.where(
+        lat_da < 5,
+        0.85,
+        xr.where(
+            lat_da < 8,
+            0.92,
+            0.95
+        )
+    ).astype("float32")
+
+lat_grid = cml_sat_xarr["y"].broadcast_like(cml_sat_xarr["rain_daily_total"][0])
+kstd_grid = kstd_by_lat_xr(lat_grid)
+
+dlat = float(kstd_grid["y"].diff("y").mean())
+win = int(round(0.2 / dlat))  # ≈ 7 for your grid
+
+kstd_smooth = kstd_grid.rolling(
+    y=win,
+    center=True,
+    min_periods=1
+).mean()
+
+lat = lat_grid
+
+def kstd_by_lat_xr(lat_grid, dtrans=0.5):
+    """
+    Latitude-dependent kstd with smooth transitions.
+
+    Parameters
+    ----------
+    lat_grid : xr.DataArray
+        Latitude field (2D or 1D, degrees_north)
+    dtrans : float
+        Transition width in degrees (default: 0.5)
+
+    Returns
+    -------
+    kstd : xr.DataArray
+        Smooth kstd field
+    """
+
+    kstd = xr.where(
+        lat_grid < 5 - dtrans / 2, 0.85,
+        xr.where(
+            lat_grid < 5 + dtrans / 2,
+            0.85 + (lat_grid - (5 - dtrans / 2)) / dtrans * (0.92 - 0.85),
+            xr.where(
+                lat_grid < 8 - dtrans / 2, 0.92,
+                xr.where(
+                    lat_grid < 8 + dtrans / 2,
+                    0.92 + (lat_grid - (8 - dtrans / 2)) / dtrans * (0.95 - 0.92),
+                    0.95
+                )
+            )
+        )
+    )
+
+    return kstd.astype("float32")
+
+lat_grid = cml_sat_xarr["y"].broadcast_like(cml_sat_xarr["rain_daily_total"][0])
+kstd_grid = kstd_by_lat_xr(lat_grid)
 
 cml = xr.open_dataset(r'/home/kkumah/Projects/cml-stuff/out_rain_trials/out_daily/CML-SAT_Rainfall_Estimates_Daily_V1_20250903.nc')
 # img = xr.open_dataset(r'/home/kkumah/Projects/cml-stuff/satellite_data/imergv07/data/')
