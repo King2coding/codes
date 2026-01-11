@@ -9,6 +9,7 @@ import xarray as xr
 import matplotlib.pyplot as plt
 import matplotlib as mpl
 import matplotlib.dates as mdates
+from sklearn.linear_model import LinearRegression
 
 from datetime import datetime, timedelta
 
@@ -564,6 +565,165 @@ def plot_latitude_profiles(
     plt.tight_layout()
     plt.show()
 
+def make_cat_performance_diagram(cat_df_res):
+    '''
+    cat_df_res = should be a dataframe of the categorical metrics containing POD, FAR etc as rown names and
+                 product names for which metric was computed as column names
+
+    eval_elements = should be a list containing:
+                    columnm names, plot marker marker, product evaluated,colors to use for plot
+    '''
+    def calculate_csi(pod, success_ratio):
+        csi = np.where(pod + success_ratio == 0, 0, pod * success_ratio / (pod + success_ratio - pod * success_ratio))
+        return np.nan_to_num(csi)
+    # floating variables
+    # ['k','k','r','r']
+    clrs = ['r','c','g','m','b','orange','k','grey','lime','khaki','royalblue','lavender','wheat']
+    # ['o','*','o','*',]
+    mrker = ['o','p','D','^','s','8','*','^', '<', '>',]
+    pod_spc = np.linspace(0, 1, 100)
+    success_ratio_spc = np.linspace(0, 1, 100)
+
+    X, Y = np.meshgrid(success_ratio_spc, pod_spc)
+    CSI = calculate_csi(Y, X)
+
+    # Create the main figure and axis
+    fig, ax1 = plt.subplots(figsize=(6,8), dpi=1000)
+    plt.subplots_adjust(bottom=0.3)
+
+    # Plot the contour lines for CSI
+    csi_levels = np.arange(0.1, 1.0, 0.1)
+    CSI_contours = ax1.contour(X, Y, CSI, levels=csi_levels, colors='brown', linestyles='solid')
+    # ax1.clabel(CSI_contours, inline=1, fontsize=10, fmt='%1.1f', colors='r')
+
+    # Plotting bias lines
+    for fb_level in [0.5, 1, 1.2, 1.5, 2, 4]:
+        fb_line = pod_spc * fb_level
+        valid = fb_line <= 1
+        ax1.plot(success_ratio_spc[valid], fb_line[valid], c='steelblue',ls = '--', lw=2)
+        label_x = 1 / fb_level if fb_level > 1 else 0.95
+        label_y = fb_line[int(label_x * 100)] if fb_level > 1 else 0.95 * fb_level
+        ax1.text(label_x, label_y, str(fb_level), color='steelblue',
+                    fontsize=12, ha='center',fontweight='bold')
+        if fb_level == 1:  # We'll only write "Bias" near the line where the frequency bias is 1
+            ax1.text(0.5, 0.5*fb_level, 'Bias', color='steelblue', fontsize=12, fontweight='bold' ,
+                        ha='center', va='bottom', rotation=45) # , backgroundcolor='white'
+
+    # Plotting points for each sim obs eval data points
+    for it in enumerate(cat_df_res.columns.to_list()):
+        clnme_used = it[1]
+        evl_prdt = clnme_used#.split('vrs')[0]
+
+        podd = cat_df_res.loc['POD',clnme_used]
+        farr = cat_df_res.loc['FAR',clnme_used]
+
+        succ_ratio = 1 - farr # success ration
+
+        ax1.plot(succ_ratio, podd, marker = mrker[it[0]], color=clrs[it[0]], markersize=8, label=evl_prdt)
+
+    ax1.minorticks_on()
+    ax1.tick_params(which='major', axis= 'both', direction='in',length=5, top=True, 
+                    right=True, bottom=True, left=True)  # Adjust major tick length
+    ax1.tick_params(which='minor', axis= 'both', direction='in', length=2.5, top=True, 
+                    right=True, bottom=True, left=True) 
+    # Customizing the axis
+    # ax1.set_title('Performance Diagram')
+    ax1.set_xlabel('Success Ratio (1 - FAR)',fontsize=12)
+    ax1.set_xticklabels([f'{level:.1f}' for level in [0.0,0.2,0.4,
+                        0.6,0.8,1.0]], fontsize=15)
+    ax1.set_ylabel('POD', fontsize=12)
+    ax1.set_yticklabels([f'{level:.1f}' for level in [0.0,0.2,0.4,
+                        0.6,0.8,1.0,1.1]], fontsize=12)
+    ax1.grid(True,ls='--',lw=0.5)
+
+    # Secondary y-axis for CSI
+    ax2 = ax1.twinx()
+    ax2.set_ylabel('CSI', fontsize=15, color='brown')  # Setting the label color to red
+    ax2.set_ylim(0, 1)
+    ax2.set_yticks(csi_levels)
+    ax2.set_yticklabels([f'{level:.1f}' for level in csi_levels], color='brown',
+                        fontsize=12)  # Setting the tick labels color to red
+    ax2.minorticks_on()
+    ax2.tick_params(which='major', axis= 'both', direction='in',length=5, 
+                    top=True, right=True, bottom=True, left=True)  # Adjust major tick length
+    ax2.tick_params(which='minor', axis= 'both', direction='in', length=2.5, 
+                    top=True, right=True, bottom=True, left=True) 
+
+    # Fixing the legend issue
+    # Collect labels and handles and keep only unique entries for the legend
+    
+    handles, labels = ax1.get_legend_handles_labels()
+    unique = dict(zip(labels, handles)).items()
+    ax1.legend(handles=handles, labels=labels, loc='upper center', frameon=False, 
+               bbox_to_anchor=(0.5, -0.12), ncol=2, fontsize=15)
+
+def cat_stats_dict_to_df(stats_dict, product_names,
+                          metrics=('POD', 'FAR', 'Bias', 'CSI')):
+    """
+    Convert multiple categorical_stats dict outputs into
+    a DataFrame suitable for Roebber / performance diagrams.
+
+    Parameters
+    ----------
+    stats_dict : dict
+        {product_name: stats_dict_from_categorical_stats}
+    product_names : list
+        Ordered list of product names (columns)
+    metrics : tuple
+        Metrics to include (row index)
+
+    Returns
+    -------
+    pandas.DataFrame
+        index = metrics
+        columns = product_names
+    """
+
+    df = pd.DataFrame(index=metrics, columns=product_names, dtype=float)
+
+    for prod in product_names:
+        for m in metrics:
+            df.loc[m, prod] = stats_dict[prod][m]
+
+    return df
+
+def add_regression_line(ax, x, y, color, xlim):
+
+    # Convert xarray → numpy
+    if hasattr(x, "values"):
+        x = x.values
+    if hasattr(y, "values"):
+        y = y.values
+
+    x = np.asarray(x, dtype=float)
+    y = np.asarray(y, dtype=float)
+
+    mask = np.isfinite(x) & np.isfinite(y)
+
+    if mask.sum() < 2:
+        return np.nan, np.nan, mask
+
+    x_clean = x[mask]
+    y_clean = y[mask]
+
+    model = LinearRegression()
+    model.fit(x_clean.reshape(-1, 1), y_clean.reshape(-1, 1))
+
+    slope = model.coef_[0][0]
+    intercept = model.intercept_[0]
+
+    x_line = np.linspace(xlim[0], xlim[1], 200)
+    y_line = slope * x_line + intercept
+
+    ax.plot(
+        x_line, y_line,
+        color=color, linestyle='-', linewidth=1.5,
+        label='Regression Line'
+    )
+
+    return slope, intercept, mask
+
+
 #%% Main processing
 # 1) Read and preprocess IMERG data day by day
 daily_xr = []
@@ -738,7 +898,7 @@ fig, axs = plot_precip_1x2_compare_ghana(
     lats=imerg_ghana_2dmean.latitude.values,
     titles=["IMERG", "ERA5", "CML-SAT"],
     vmin=0,
-    vmax=15
+    vmax=7
 )
 gc.collect()
 
@@ -761,7 +921,7 @@ plot_latitude_profiles(
     imerg_ghana_zonalmean,   #  IMERG 1D DataArray
     era5_ghana_zonalmean,    #  ERA5 1D DataArray
     cml_sat_ghana_zonalmean, #  CML-SAT 1D DataArray
-    xlim=(0, 12),
+    xlim=(0, 8),
     title="Latitudinal Mean Rainfall"
 )
 gc.collect()
@@ -804,43 +964,7 @@ plt.tight_layout()
 gc.collect()
 #%% 3) Do scatter plot analysis
 
-from sklearn.linear_model import LinearRegression
 
-def add_regression_line(ax, x, y, color, xlim):
-
-    # Convert xarray → numpy
-    if hasattr(x, "values"):
-        x = x.values
-    if hasattr(y, "values"):
-        y = y.values
-
-    x = np.asarray(x, dtype=float)
-    y = np.asarray(y, dtype=float)
-
-    mask = np.isfinite(x) & np.isfinite(y)
-
-    if mask.sum() < 2:
-        return np.nan, np.nan, mask
-
-    x_clean = x[mask]
-    y_clean = y[mask]
-
-    model = LinearRegression()
-    model.fit(x_clean.reshape(-1, 1), y_clean.reshape(-1, 1))
-
-    slope = model.coef_[0][0]
-    intercept = model.intercept_[0]
-
-    x_line = np.linspace(xlim[0], xlim[1], 200)
-    y_line = slope * x_line + intercept
-
-    ax.plot(
-        x_line, y_line,
-        color=color, linestyle='-', linewidth=1.5,
-        label='Regression Line'
-    )
-
-    return slope, intercept, mask
 
 # FIGURE SETUP
 fig, axs = plt.subplots(1, 3, figsize=(15, 5), dpi=140)
@@ -1032,36 +1156,6 @@ imerg_era5_stats = categorical_stats(
 )
 
 
-def cat_stats_dict_to_df(stats_dict, product_names,
-                          metrics=('POD', 'FAR', 'Bias', 'CSI')):
-    """
-    Convert multiple categorical_stats dict outputs into
-    a DataFrame suitable for Roebber / performance diagrams.
-
-    Parameters
-    ----------
-    stats_dict : dict
-        {product_name: stats_dict_from_categorical_stats}
-    product_names : list
-        Ordered list of product names (columns)
-    metrics : tuple
-        Metrics to include (row index)
-
-    Returns
-    -------
-    pandas.DataFrame
-        index = metrics
-        columns = product_names
-    """
-
-    df = pd.DataFrame(index=metrics, columns=product_names, dtype=float)
-
-    for prod in product_names:
-        for m in metrics:
-            df.loc[m, prod] = stats_dict[prod][m]
-
-    return df
-
 
 stats_imerg_obs = {
     "CML-SAT": cml_sat_imerg_stats,
@@ -1085,98 +1179,7 @@ cat_df_era5_obs = cat_stats_dict_to_df(
 
 
 
-def make_cat_performance_diagram(cat_df_res):
-    '''
-    cat_df_res = should be a dataframe of the categorical metrics containing POD, FAR etc as rown names and
-                 product names for which metric was computed as column names
 
-    eval_elements = should be a list containing:
-                    columnm names, plot marker marker, product evaluated,colors to use for plot
-    '''
-    def calculate_csi(pod, success_ratio):
-        csi = np.where(pod + success_ratio == 0, 0, pod * success_ratio / (pod + success_ratio - pod * success_ratio))
-        return np.nan_to_num(csi)
-    # floating variables
-    # ['k','k','r','r']
-    clrs = ['r','c','g','m','b','orange','k','grey','lime','khaki','royalblue','lavender','wheat']
-    # ['o','*','o','*',]
-    mrker = ['o','p','D','^','s','8','*','^', '<', '>',]
-    pod_spc = np.linspace(0, 1, 100)
-    success_ratio_spc = np.linspace(0, 1, 100)
-
-    X, Y = np.meshgrid(success_ratio_spc, pod_spc)
-    CSI = calculate_csi(Y, X)
-
-    # Create the main figure and axis
-    fig, ax1 = plt.subplots(figsize=(6,8), dpi=1000)
-    plt.subplots_adjust(bottom=0.3)
-
-    # Plot the contour lines for CSI
-    csi_levels = np.arange(0.1, 1.0, 0.1)
-    CSI_contours = ax1.contour(X, Y, CSI, levels=csi_levels, colors='brown', linestyles='solid')
-    # ax1.clabel(CSI_contours, inline=1, fontsize=10, fmt='%1.1f', colors='r')
-
-    # Plotting bias lines
-    for fb_level in [0.5, 1, 1.2, 1.5, 2, 4]:
-        fb_line = pod_spc * fb_level
-        valid = fb_line <= 1
-        ax1.plot(success_ratio_spc[valid], fb_line[valid], c='steelblue',ls = '--', lw=2)
-        label_x = 1 / fb_level if fb_level > 1 else 0.95
-        label_y = fb_line[int(label_x * 100)] if fb_level > 1 else 0.95 * fb_level
-        ax1.text(label_x, label_y, str(fb_level), color='steelblue',
-                    fontsize=12, ha='center',fontweight='bold')
-        if fb_level == 1:  # We'll only write "Bias" near the line where the frequency bias is 1
-            ax1.text(0.5, 0.5*fb_level, 'Bias', color='steelblue', fontsize=12, fontweight='bold' ,
-                        ha='center', va='bottom', rotation=45) # , backgroundcolor='white'
-
-    # Plotting points for each sim obs eval data points
-    for it in enumerate(cat_df_res.columns.to_list()):
-        clnme_used = it[1]
-        evl_prdt = clnme_used#.split('vrs')[0]
-
-        podd = cat_df_res.loc['POD',clnme_used]
-        farr = cat_df_res.loc['FAR',clnme_used]
-
-        succ_ratio = 1 - farr # success ration
-
-        ax1.plot(succ_ratio, podd, marker = mrker[it[0]], color=clrs[it[0]], markersize=8, label=evl_prdt)
-
-    ax1.minorticks_on()
-    ax1.tick_params(which='major', axis= 'both', direction='in',length=5, top=True, 
-                    right=True, bottom=True, left=True)  # Adjust major tick length
-    ax1.tick_params(which='minor', axis= 'both', direction='in', length=2.5, top=True, 
-                    right=True, bottom=True, left=True) 
-    # Customizing the axis
-    # ax1.set_title('Performance Diagram')
-    ax1.set_xlabel('Success Ratio (1 - FAR)',fontsize=12)
-    ax1.set_xticklabels([f'{level:.1f}' for level in [0.0,0.2,0.4,
-                        0.6,0.8,1.0]], fontsize=15)
-    ax1.set_ylabel('POD', fontsize=12)
-    ax1.set_yticklabels([f'{level:.1f}' for level in [0.0,0.2,0.4,
-                        0.6,0.8,1.0,1.1]], fontsize=12)
-    ax1.grid(True,ls='--',lw=0.5)
-
-    # Secondary y-axis for CSI
-    ax2 = ax1.twinx()
-    ax2.set_ylabel('CSI', fontsize=15, color='brown')  # Setting the label color to red
-    ax2.set_ylim(0, 1)
-    ax2.set_yticks(csi_levels)
-    ax2.set_yticklabels([f'{level:.1f}' for level in csi_levels], color='brown',
-                        fontsize=12)  # Setting the tick labels color to red
-    ax2.minorticks_on()
-    ax2.tick_params(which='major', axis= 'both', direction='in',length=5, 
-                    top=True, right=True, bottom=True, left=True)  # Adjust major tick length
-    ax2.tick_params(which='minor', axis= 'both', direction='in', length=2.5, 
-                    top=True, right=True, bottom=True, left=True) 
-
-    # Fixing the legend issue
-    # Collect labels and handles and keep only unique entries for the legend
-    
-    handles, labels = ax1.get_legend_handles_labels()
-    unique = dict(zip(labels, handles)).items()
-    ax1.legend(handles=handles, labels=labels, loc='upper center', frameon=False, 
-               bbox_to_anchor=(0.5, -0.12), ncol=2, fontsize=15)
-    
 
 make_cat_performance_diagram(cat_df_imerg_obs)
 
@@ -1526,90 +1529,90 @@ cat_stats_at_gauge.columns = ["CML-SAT", "IMERG", "ERA5"]
 make_cat_performance_diagram(cat_stats_at_gauge)
 
 #-------------------------
-df_mean = (
-    compare_df.copy()
-    .groupby("station")[["gauge", "cml_sat", "imerg", "era5"]]
-    .mean()
-    .reset_index()
-)
+# df_mean = (
+#     compare_df.copy()
+#     .groupby("station")[["gauge", "cml_sat", "imerg", "era5"]]
+#     .mean()
+#     .reset_index()
+# )
 
-df_mean
+# df_mean
 
-fig, axs = plt.subplots(1, 3, figsize=(15, 5), dpi=140)
+# fig, axs = plt.subplots(1, 3, figsize=(15, 5), dpi=140)
 
-xlims = (0., 15.)
-ylims = (0., 15.)
-ticks = np.arange(0, 16, 3)
+# xlims = (0., 15.)
+# ylims = (0., 15.)
+# ticks = np.arange(0, 16, 3)
 
-plots = [
-    (axs[0], df_mean["gauge"], df_mean["cml_sat"], "CML-SAT vs Gauge (Mean Daily)"),
-    (axs[1], df_mean["gauge"], df_mean["imerg"],  "IMERG vs Gauge (Mean Daily)"),
-    (axs[2], df_mean["gauge"], df_mean["era5"],   "ERA5 vs Gauge (Mean Daily)"),
-]
+# plots = [
+#     (axs[0], df_mean["gauge"], df_mean["cml_sat"], "CML-SAT vs Gauge (Mean Daily)"),
+#     (axs[1], df_mean["gauge"], df_mean["imerg"],  "IMERG vs Gauge (Mean Daily)"),
+#     (axs[2], df_mean["gauge"], df_mean["era5"],   "ERA5 vs Gauge (Mean Daily)"),
+# ]
 
-for ax, x, y, title in plots:
+# for ax, x, y, title in plots:
 
-    ax.set_xlim(xlims)
-    ax.set_ylim(ylims)
-    ax.set_xticks(ticks)
-    ax.set_yticks(ticks)
+#     ax.set_xlim(xlims)
+#     ax.set_ylim(ylims)
+#     ax.set_xticks(ticks)
+#     ax.set_yticks(ticks)
 
-    # scatter (36 points)
-    ax.scatter(
-        x, y,
-        s=80, color="k", edgecolor="black", alpha=0.9
-    )
+#     # scatter (36 points)
+#     ax.scatter(
+#         x, y,
+#         s=80, color="k", edgecolor="black", alpha=0.9
+#     )
 
-    # 1:1 line
-    ax.plot(
-        [xlims[0], xlims[1]],
-        [ylims[0], ylims[1]],
-        "k--", lw=1.5
-    )
+#     # 1:1 line
+#     ax.plot(
+#         [xlims[0], xlims[1]],
+#         [ylims[0], ylims[1]],
+#         "k--", lw=1.5
+#     )
 
-    # regression
-    slope, intercept, mask = add_regression_line(ax, x, y, "k", xlims)
+#     # regression
+#     slope, intercept, mask = add_regression_line(ax, x, y, "k", xlims)
 
-    # metrics
-    corr, bias, rmse = compute_metrics(x.values, y.values)
+#     # metrics
+#     corr, bias, rmse = compute_metrics(x.values, y.values)
 
-    eq_text = f"y = {slope:.2f}x + {intercept:.2f}"
+#     eq_text = f"y = {slope:.2f}x + {intercept:.2f}"
 
-    metrics_text = (
-        f"Corr = {corr:.2f}\n"
-        f"Bias = {bias:.1%}\n"
-        f"RMSE = {rmse:.2f}\n"
-        f"{eq_text}\n"
-        "--  1:1 line\n"
-        "—   Regression line"
-    )
+#     metrics_text = (
+#         f"Corr = {corr:.2f}\n"
+#         f"Bias = {bias:.1%}\n"
+#         f"RMSE = {rmse:.2f}\n"
+#         f"{eq_text}\n"
+#         "--  1:1 line\n"
+#         "—   Regression line"
+#     )
 
-    ax.text(
-        0.03, 0.97,
-        metrics_text,
-        transform=ax.transAxes,
-        fontsize=13,
-        fontweight="bold",
-        va="top", ha="left",
-        bbox=dict(facecolor="white", alpha=0.6, edgecolor="none")
-    )
+#     ax.text(
+#         0.03, 0.97,
+#         metrics_text,
+#         transform=ax.transAxes,
+#         fontsize=13,
+#         fontweight="bold",
+#         va="top", ha="left",
+#         bbox=dict(facecolor="white", alpha=0.6, edgecolor="none")
+#     )
 
-    ax.set_title(title, fontsize=15, fontweight="bold")
-    ax.minorticks_on()
-    ax.tick_params(axis="both", which="major", labelsize=14, length=7, direction="in")
-    ax.tick_params(axis="both", which="minor", length=4, direction="in")
-    ax.grid(which="major", linestyle="--", linewidth=0.6, color="grey")
+#     ax.set_title(title, fontsize=15, fontweight="bold")
+#     ax.minorticks_on()
+#     ax.tick_params(axis="both", which="major", labelsize=14, length=7, direction="in")
+#     ax.tick_params(axis="both", which="minor", length=4, direction="in")
+#     ax.grid(which="major", linestyle="--", linewidth=0.6, color="grey")
 
-axs[0].set_xlabel("Gauge mean [mm/day]", fontsize=15)
-axs[1].set_xlabel("Gauge mean [mm/day]", fontsize=15)
-axs[2].set_xlabel("Gauge mean [mm/day]", fontsize=15)
+# axs[0].set_xlabel("Gauge mean [mm/day]", fontsize=15)
+# axs[1].set_xlabel("Gauge mean [mm/day]", fontsize=15)
+# axs[2].set_xlabel("Gauge mean [mm/day]", fontsize=15)
 
-axs[0].set_ylabel("CML-SAT mean [mm/day]", fontsize=15)
-axs[1].set_ylabel("IMERG mean [mm/day]", fontsize=15)
-axs[2].set_ylabel("ERA5 mean [mm/day]", fontsize=15)
+# axs[0].set_ylabel("CML-SAT mean [mm/day]", fontsize=15)
+# axs[1].set_ylabel("IMERG mean [mm/day]", fontsize=15)
+# axs[2].set_ylabel("ERA5 mean [mm/day]", fontsize=15)
 
-plt.tight_layout()
-plt.show()
+# plt.tight_layout()
+# plt.show()
 #-------------------------
 # gg = pd.read_csv(os.path.join(gauge_dirv, 'TA00010.csv'))
 # gg.head(5)

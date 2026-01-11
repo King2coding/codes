@@ -204,79 +204,124 @@ def rasterize_me(meta_data, polygon2rasterize, rast_val):
 #     out = np.where(keep, 1, 0).astype(np.int16)
 #     out = np.where(np.isfinite(bt_rast), out, np.nan)
 #     return out
-
-def kstd_by_lat(lat):
+def kstd_by_lat_xr(lat_grid, dtrans=0.5):
     """
-    lat: array (2D lat grid)
-    """
-    lat = np.asarray(lat)
+    Latitude-dependent kstd with smooth transitions.
+    Tuned to reduce wet bias while preserving convective cores.
+    •	Coastal (<5°): 0.95
+	•	Forest / transition (5–8°): 1.00
+	•	Savanna (>8°): 1.05
 
-    k = np.zeros_like(lat, dtype="float32")
+    Parameters
+    ----------
+    lat_grid : xr.DataArray
+        Latitude field (2D or 1D, degrees_north)
+    dtrans : float
+        Transition width in degrees (default: 0.5)
 
-    # coastal → forest
-    k = np.where(lat < 5, 0.85, k)
-    k = np.where((lat >= 5) & (lat < 8), 0.92, k)
-
-    # forest → savanna
-    k = np.where((lat >= 8), 0.95, k)     
-    return k
-
-def kstd_by_lat_xr(lat_da):
-    """
-    lat_da: xarray.DataArray
-        1D (y) or 2D (y, x) latitude field
     Returns
     -------
-    kstd : xarray.DataArray
-        Same shape as lat_da
+    kstd : xr.DataArray
+        Smooth kstd field
     """
 
-    # start with zeros, preserve coords & dims
-    k = xr.zeros_like(lat_da, dtype="float32")
+    kstd = xr.where(
+        lat_grid < 5 - dtrans / 2, 0.95,  # Coastal Savanna
+        xr.where(
+            lat_grid < 5 + dtrans / 2,
+            0.95 + (lat_grid - (5 - dtrans / 2)) / dtrans * (1.00 - 0.95),
+            xr.where(
+                lat_grid < 8 - dtrans / 2, 1.00,  # Forest / Transition
+                xr.where(
+                    lat_grid < 8 + dtrans / 2,
+                    1.00 + (lat_grid - (8 - dtrans / 2)) / dtrans * (1.05 - 1.00),
+                    1.05  # Guinea Savanna
+                )
+            )
+        )
+    )
 
-    # coastal
-    k = k.where(lat_da < 5, 0.88)
+    return kstd.astype("float32")
+# def kstd_by_lat_xr(lat_da):
 
-    # forest / transition
-    k = k.where(~((lat_da >= 5) & (lat_da < 8)), 0.92)
-
-    # savanna and beyond
-    k = k.where((lat_da >= 8) & (lat_da < 9), 0.98)
-
-    k = k.where((lat_da >= 9) & (lat_da < 10), 1.1)
-
-    k = k.where(lat_da >= 10, 1.37)
-
-    return k
+#     return xr.where(
+#         lat_da < 5,
+#         0.85,
+#         xr.where(
+#             lat_da < 8,
+#             0.92,
+#             0.95
+#         )
+#     ).astype("float32")
 
 def correct_wet_mask(bin_rast, 
                      bt_rast, 
                      meta, 
                      use_std=False, 
-                     lat_grid=None):
-    # relaxed: keep where BT <= mean + 2*std (per wet patch)
-    gdf = array_to_vector(bin_rast, [1], meta["transform"])
-    if len(gdf)==0: 
-        return bin_rast
-    bt_stats = np.where(np.isfinite(bt_rast), bt_rast, -999.0)
-    zs = zonal_stats(gdf.geometry, bt_stats, stats=["mean","std"],
-                     affine=meta["transform"], nodata=-999.0)
-    gdf = pd.concat([gdf.reset_index(drop=True), pd.DataFrame(zs)], axis=1)
-    mean_r = rasterize_me(meta, gdf, "mean"); std_r = rasterize_me(meta, gdf, "std")
-    # choose threshold: mean only (old) or mean + k_std*std
-    if use_std:
-        
-        kstd_grid = lat_grid#kstd_by_lat(lat_grid)
+                     lat_grid=None,
+                     std_min=1.5,
+                     std_max=6.0):
+    """
+    Patch-based wet-mask correction using IR BT statistics.
 
-        thr = mean_r - (kstd_grid * std_r)
-        # thr = mean_r - (k_std * std_r)
+    Parameters
+    ----------
+    bin_rast : ndarray
+        Binary wet mask (1 = wet)
+    bt_rast : ndarray
+        Brightness temperature field (K)
+    meta : dict
+        Raster metadata (includes transform)
+    use_std : bool
+        Whether to use mean - kstd*std thresholding
+    lat_grid : ndarray or xr.DataArray
+        Latitude-dependent kstd grid
+    std_min, std_max : float
+        Min/max bounds for effective BT std (K)
+
+    Returns
+    -------
+    out : ndarray
+        Corrected wet mask
+    """
+
+    gdf = array_to_vector(bin_rast, [1], meta["transform"])
+    if len(gdf) == 0:
+        return bin_rast
+
+    bt_stats = np.where(np.isfinite(bt_rast), bt_rast, -999.0)
+
+    zs = zonal_stats(
+        gdf.geometry,
+        bt_stats,
+        stats=["mean", "std"],
+        affine=meta["transform"],
+        nodata=-999.0
+    )
+
+    gdf = pd.concat([gdf.reset_index(drop=True), pd.DataFrame(zs)], axis=1)
+
+    mean_r = rasterize_me(meta, gdf, "mean")
+    std_r  = rasterize_me(meta, gdf, "std")
+
+    if use_std:
+        # --- NEW: stabilize BT variability ---
+        std_eff = np.clip(std_r, std_min, std_max)
+
+        # latitude-dependent kstd
+        kstd_grid = lat_grid
+
+        # threshold for keeping rain pixels
+        thr = mean_r - (kstd_grid * std_eff)
     else:
         thr = mean_r
-    keep = (bin_rast==1) & (bt_rast <= thr)
+
+    keep = (bin_rast == 1) & (bt_rast <= thr)
+
     out = np.where(keep, 1, 0).astype(np.int16)
     out = np.where(np.isfinite(bt_rast), out, np.nan)
-    return out
 
+    return out
 
 def smooth_da_mean(da, win=3):
     wet = da.where(da > 0)
@@ -355,20 +400,25 @@ def predict_slice_meanq(time_val,
     if apply_patch:
         # lat_grid = np.repeat(b1["y"].values[:, None], b1.sizes["x"], axis=1)
         lat_grid = b1["y"].broadcast_like(b1)
+         # at each lat use a different patch correction constant
         kstd_grid = kstd_by_lat_xr(lat_grid)
 
-        kstd_smooth = (
-            kstd_grid
-            .rolling(y=5, center=True, min_periods=1)
-            .mean()
-        )
+        # smooth patch correction constant to avoid boundary lines in map
+        # dlat = float(kstd_grid["y"].diff("y").mean())
+        # win = int(round(0.2 / dlat))  # ≈ 7 for your grid        
+        # kstd_smooth = kstd_grid.rolling(
+        #     y=win,
+        #     center=True,
+        #     min_periods=1
+        # ).mean()
+
         meta = xarray_meta_from_da(b1)
         wet_grid = (rain_map.values > 0).astype(np.int16)
         corr_wet = correct_wet_mask(wet_grid, 
                                     b1.values.astype("float32"), 
                                     meta, 
                                     use_std=True,
-                                    lat_grid=kstd_smooth)
+                                    lat_grid=kstd_grid)
         
         rain_map_cor = rain_map_cor.where(corr_wet == 1, 0.0)
     # smoothing
@@ -663,7 +713,7 @@ for day in days:
 
 # da = Rd  # your DataArray (y=lat, x=lon)
 # da = da.sortby("y")  # safety: ensures south->north increasing
-# daily_bins = np.arange(0,45,5)
+# daily_bins = np.arange(0,50,5)
 # # [
 # #     0,   1,   2,   5,   10,
 # #     20,  30,  40
