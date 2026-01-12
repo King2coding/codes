@@ -868,7 +868,7 @@ ax.tick_params(axis='both', which='minor', length=3, direction='in')
 ax.grid(which='major', linestyle='--', linewidth=0.6, alpha=0.6)
 
 # Legend
-ax.legend(fontsize=12, loc="upper right")
+ax.legend(fontsize=12, loc="upper right", frameon=False,ncol=3)
 
 # Major ticks → months
 ax.xaxis.set_major_locator(mdates.MonthLocator())
@@ -898,20 +898,20 @@ fig, axs = plot_precip_1x2_compare_ghana(
     lats=imerg_ghana_2dmean.latitude.values,
     titles=["IMERG", "ERA5", "CML-SAT"],
     vmin=0,
-    vmax=12
+    vmax=10
 )
 gc.collect()
 
 # 2) b) Spatial mean maps
 fig, axs = plot_precip_1x2_compare_ghana(
-    da_list=[imerg_daily_agg.sel(time='2025-09-20'), 
-             era5_daily_data.sel(time='2025-09-20'), 
-             cml_sat_daily_agg.sel(time='2025-09-20')],
+    da_list=[imerg_daily_agg.sel(time='2025-09-03'), 
+             era5_daily_data.sel(time='2025-09-03'), 
+             cml_sat_daily_agg.sel(time='2025-09-03')],
     lons=imerg_ghana_2dmean.longitude.values,
     lats=imerg_ghana_2dmean.latitude.values,
     titles=["IMERG", "ERA5", "CML-SAT"],
     vmin=0,
-    vmax=18
+    vmax=40
 )
 
 gc.collect()
@@ -1464,7 +1464,11 @@ def compute_metrics(x, y):
         return np.nan, np.nan, np.nan
 
     corr = np.corrcoef(x, y)[0, 1]
-    bias = (y.mean() / x.mean()) - 1
+    # bias = (y.mean() / x.mean()) - 1
+    mu_residuals = np.nanmean(y - x)
+    mu_obs = np.nanmean(x)
+
+    bias =  (mu_residuals/mu_obs) * 100
     rmse = np.sqrt(np.mean((y - x) ** 2))
 
     return corr, bias, rmse
@@ -1515,7 +1519,7 @@ for ax, x, y, title in plots:
 
     metrics_text = (
         f"Corr = {corr:.2f}\n"
-        f"Bias = {bias:.1%}\n"
+        f"Bias = {bias:.1f}%\n"
         f"RMSE = {rmse:.2f}\n"
         f"{eq_text}\n"
         "--  1:1 line\n"
