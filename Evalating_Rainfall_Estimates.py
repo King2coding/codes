@@ -898,7 +898,7 @@ fig, axs = plot_precip_1x2_compare_ghana(
     lats=imerg_ghana_2dmean.latitude.values,
     titles=["IMERG", "ERA5", "CML-SAT"],
     vmin=0,
-    vmax=7
+    vmax=12
 )
 gc.collect()
 
@@ -911,7 +911,7 @@ fig, axs = plot_precip_1x2_compare_ghana(
     lats=imerg_ghana_2dmean.latitude.values,
     titles=["IMERG", "ERA5", "CML-SAT"],
     vmin=0,
-    vmax=20
+    vmax=18
 )
 
 gc.collect()
@@ -921,7 +921,7 @@ plot_latitude_profiles(
     imerg_ghana_zonalmean,   #  IMERG 1D DataArray
     era5_ghana_zonalmean,    #  ERA5 1D DataArray
     cml_sat_ghana_zonalmean, #  CML-SAT 1D DataArray
-    xlim=(0, 8),
+    xlim=(0, 14),
     title="Latitudinal Mean Rainfall"
 )
 gc.collect()
@@ -963,8 +963,6 @@ axes.spines['bottom'].set_linewidth(1.2)
 plt.tight_layout()
 gc.collect()
 #%% 3) Do scatter plot analysis
-
-
 
 # FIGURE SETUP
 fig, axs = plt.subplots(1, 3, figsize=(15, 5), dpi=140)
@@ -1357,7 +1355,38 @@ def extract_point_daily(da, lat, lon):
         .to_series()
     )
 # -------------------------
+def find_grid_indices_from_coords(lat, lon, lats, lons):
+    """
+    Find nearest grid-cell indices for a given lat/lon
+    using actual coordinate vectors.
+    """
+    row = np.argmin(np.abs(lats - lat))
+    col = np.argmin(np.abs(lons - lon))
+    return row, col
+#-------------------------
+station_meta = station_meta.copy()
 
+rows, cols = [], []
+for _, r in station_meta.iterrows():
+    row, col = find_grid_indices_from_coords(
+        r["latitude"], r["longitude"],
+        era5_daily_data['latitude'].values, era5_daily_data['longitude'].values
+    )
+    rows.append(row)
+    cols.append(col)
+
+station_meta["row"] = rows
+station_meta["col"] = cols
+station_meta["pixel_id"] = list(zip(rows, cols))
+
+pix_gauge_count = (
+    station_meta
+    .groupby(["row", "col"])["station code"]
+    .nunique()
+    .rename("n_gauge")
+    .reset_index()
+)
+#-------------------------
 # build daily gauge dataframe
 daily_gauges = []
 for fp in all_gauges_files:
@@ -1372,6 +1401,8 @@ records = []
 
 for sid, row in station_meta.iterrows():
     lat, lon = row["latitude"], row["longitude"]
+    pid = row["pixel_id"]
+    st_row, st_col = row["row"], row["col"]
 
     # gauge daily
     g = gauge_daily_df[row['station code']].dropna()
@@ -1395,9 +1426,30 @@ for sid, row in station_meta.iterrows():
     # ).dropna()
 
     df_merg["station"] = row['station code']
+    df_merg["st_row"] = st_row
+    df_merg["st_col"] = st_col
     records.append(df_merg.reset_index())
 
 compare_df = pd.concat(records, ignore_index=True)
+
+compare_df = compare_df.merge(
+    pix_gauge_count,
+    left_on=["st_row", "st_col"],
+    right_on=["row", "col"],
+    how="left"
+)
+
+compare_df_pix = (
+    compare_df
+    .groupby(["st_row", "st_col", "timestamp"], as_index=False)
+    .agg(
+        gauge=("gauge", "mean"),
+        cml_sat=("cml_sat", "mean"),
+        imerg=("imerg", "mean"),
+        era5=("era5", "mean"),
+        n_gauge=("n_gauge", "first")
+    )
+)
 # Ensure numeric
 for c in ["gauge", "cml_sat", "imerg", "era5"]:
     compare_df[c] = pd.to_numeric(compare_df[c], errors="coerce")
@@ -1421,10 +1473,10 @@ import matplotlib.pyplot as plt
 import gc
 
 fig, axs = plt.subplots(1, 3, figsize=(15, 5), dpi=140)
-
-xlims = (0., 40.)
-ylims = (0., 40.)
-ticks = np.arange(0, 41, 10)
+mzval = 50.0
+xlims = (0., mzval)
+ylims = (0., mzval)
+ticks = np.arange(0, mzval+1, 10)
 
 plots = [
     (axs[0], compare_df["gauge"], compare_df["cml_sat"], "CML-SAT vs Gauge"),
@@ -1443,14 +1495,14 @@ for ax, x, y, title in plots:
     # scatter
     ax.scatter(
         x, y,
-        s=45, color="k", edgecolor="black", alpha=0.85
+        s=45, color="r", edgecolor="k", alpha=0.85
     )
 
     # 1:1 line
     ax.plot(
         [xlims[0], xlims[1]],
         [ylims[0], ylims[1]],
-        "k--", lw=1.5
+        "b--", lw=1.5
     )
 
     # regression line
