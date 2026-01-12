@@ -306,13 +306,13 @@ def correct_wet_mask(bin_rast,
 
     if use_std:
         # --- NEW: stabilize BT variability ---
-        std_eff = np.clip(std_r, std_min, std_max)
+        # std_eff = np.clip(std_r, std_min, std_max)
 
         # latitude-dependent kstd
         kstd_grid = lat_grid
 
         # threshold for keeping rain pixels
-        thr = mean_r - (kstd_grid * std_eff)
+        thr = mean_r - (kstd_grid * std_r)
     else:
         thr = mean_r
 
@@ -687,102 +687,102 @@ for day in days:
 
 #%%
 # plot using cartopy to show boundary
-# import matplotlib.pyplot as plt
-# import cartopy.crs as ccrs
-# import cartopy.feature as cfeature
-# from matplotlib.colors import BoundaryNorm
-# from matplotlib.cm import ScalarMappable
-# import numpy as np
-# from matplotlib.colors import BoundaryNorm, ListedColormap
-# import matplotlib.pyplot as plt
-# import shapely.geometry as sgeom
-# import shapely.vectorized as svec
-# import numpy as np
+import matplotlib.pyplot as plt
+import cartopy.crs as ccrs
+import cartopy.feature as cfeature
+from matplotlib.colors import BoundaryNorm
+from matplotlib.cm import ScalarMappable
+import numpy as np
+from matplotlib.colors import BoundaryNorm, ListedColormap
+import matplotlib.pyplot as plt
+import shapely.geometry as sgeom
+import shapely.vectorized as svec
+import numpy as np
 
-# def add_geo(ax):
-#     ax.coastlines(resolution="10m", linewidth=1.1, color="black")
-#     ax.add_feature(cfeature.BORDERS, linewidth=0.9, edgecolor="black")
-#     gl = ax.gridlines(draw_labels=True, linewidth=0.5, color="gray", alpha=0.7, linestyle="--")
-#     gl.top_labels = False
-#     gl.right_labels = False
-#     gl.xlabel_style = {"size": 10, "color": "black"}
-#     gl.ylabel_style = {"size": 10, "color": "black"}
-#     gl.xlocator = plt.MultipleLocator(1.0)
-#     gl.ylocator = plt.MultipleLocator(1.0)
+def add_geo(ax):
+    ax.coastlines(resolution="10m", linewidth=1.1, color="black")
+    ax.add_feature(cfeature.BORDERS, linewidth=0.9, edgecolor="black")
+    gl = ax.gridlines(draw_labels=True, linewidth=0.5, color="gray", alpha=0.7, linestyle="--")
+    gl.top_labels = False
+    gl.right_labels = False
+    gl.xlabel_style = {"size": 10, "color": "black"}
+    gl.ylabel_style = {"size": 10, "color": "black"}
+    gl.xlocator = plt.MultipleLocator(1.0)
+    gl.ylocator = plt.MultipleLocator(1.0)
 
 
-# da = Rd  # your DataArray (y=lat, x=lon)
-# da = da.sortby("y")  # safety: ensures south->north increasing
-# daily_bins = np.arange(0,50,5)
-# # [
-# #     0,   1,   2,   5,   10,
-# #     20,  30,  40
-# # ]
+da = Rd  # your DataArray (y=lat, x=lon)
+da = da.sortby("y")  # safety: ensures south->north increasing
+daily_bins = np.arange(0,50,5)
+# [
+#     0,   1,   2,   5,   10,
+#     20,  30,  40
+# ]
 
-# base_cmap = plt.cm.Spectral_r  # or turbo   # or viridis, plasma, 
-# daily_cmap = ListedColormap(
-#     base_cmap(np.linspace(0.05, 0.95, len(daily_bins) - 1))
-# )
+base_cmap = plt.cm.Spectral_r  # or turbo   # or viridis, plasma, 
+daily_cmap = ListedColormap(
+    base_cmap(np.linspace(0.05, 0.95, len(daily_bins) - 1))
+)
 
-# daily_norm = BoundaryNorm(
-#     boundaries=daily_bins,
-#     ncolors=daily_cmap.N,
-#     clip=True
-# )
+daily_norm = BoundaryNorm(
+    boundaries=daily_bins,
+    ncolors=daily_cmap.N,
+    clip=True
+)
 
-# import cartopy.io.shapereader as shpreader
-# import shapely.geometry as sgeom
+import cartopy.io.shapereader as shpreader
+import shapely.geometry as sgeom
 
-# shp = shpreader.natural_earth(
-#     resolution="10m",
-#     category="cultural",
-#     name="admin_0_countries"
-# )
+shp = shpreader.natural_earth(
+    resolution="10m",
+    category="cultural",
+    name="admin_0_countries"
+)
 
-# reader = shpreader.Reader(shp)
-# ghana_geom = None
-# for rec in reader.records():
-#     if rec.attributes["NAME_LONG"] == "Ghana":
-#         ghana_geom = rec.geometry
-#         break
+reader = shpreader.Reader(shp)
+ghana_geom = None
+for rec in reader.records():
+    if rec.attributes["NAME_LONG"] == "Ghana":
+        ghana_geom = rec.geometry
+        break
 
-# # Ghana geometry is already loaded as ghana_geom (shapely)
-# lon2d, lat2d = np.meshgrid(
-#     da["x"].values,
-#     da["y"].values
-# )
+# Ghana geometry is already loaded as ghana_geom (shapely)
+lon2d, lat2d = np.meshgrid(
+    da["x"].values,
+    da["y"].values
+)
 
-# ghana_mask = svec.contains(ghana_geom, lon2d, lat2d)
+ghana_mask = svec.contains(ghana_geom, lon2d, lat2d)
 
-# R_daily_ghana = da.where(ghana_mask)
+R_daily_ghana = da.where(ghana_mask)
 
-# proj = ccrs.PlateCarree()
-# fig = plt.figure(figsize=(8,8), dpi=150)
-# ax = plt.axes(projection=proj)
+proj = ccrs.PlateCarree()
+fig = plt.figure(figsize=(8,8), dpi=150)
+ax = plt.axes(projection=proj)
 
-# ax.set_extent([-3.5, 1.25, 4.5, 11.2], crs=proj)
+ax.set_extent([-3.5, 1.25, 4.5, 11.2], crs=proj)
 
-# # ax.add_feature(cfeature.OCEAN.with_scale("10m"), facecolor="aqua")
-# # ax.add_feature(cfeature.LAKES.with_scale("10m"), facecolor="aqua", edgecolor="none")
-# ax.coastlines(resolution="10m", linewidth=1.0)
-# ax.add_feature(cfeature.BORDERS.with_scale("10m"), linewidth=0.7, edgecolor="0.25")
+# ax.add_feature(cfeature.OCEAN.with_scale("10m"), facecolor="aqua")
+# ax.add_feature(cfeature.LAKES.with_scale("10m"), facecolor="aqua", edgecolor="none")
+ax.coastlines(resolution="10m", linewidth=1.0)
+ax.add_feature(cfeature.BORDERS.with_scale("10m"), linewidth=0.7, edgecolor="0.25")
 
-# gl = ax.gridlines(draw_labels=True, linewidth=0.4, color="0.6", alpha=0.6, linestyle="--")
-# gl.right_labels = False
-# gl.top_labels = False
+gl = ax.gridlines(draw_labels=True, linewidth=0.4, color="0.6", alpha=0.6, linestyle="--")
+gl.right_labels = False
+gl.top_labels = False
 
-# # ensure y-axis is ordered correctly
-# R_daily = R_daily_ghana.sortby("y")
+# ensure y-axis is ordered correctly
+R_daily = R_daily_ghana.sortby("y")
 
-# im = ax.pcolormesh(
-#     R_daily["x"].values,
-#     R_daily["y"].values,
-#     R_daily.values,
-#     cmap=daily_cmap,
-#     norm=daily_norm,
-#     transform=proj,
-#     shading="auto"
-# )
+im = ax.pcolormesh(
+    R_daily["x"].values,
+    R_daily["y"].values,
+    R_daily.values,
+    cmap=daily_cmap,
+    norm=daily_norm,
+    transform=proj,
+    shading="auto"
+)
 
 # # Ghana outline on top
 # ax.add_geometries(
@@ -795,13 +795,13 @@ for day in days:
 # )
 
 # add_geo(ax)
-# ax.set_title(f"Daily total predicted rainfall\n{str(day_str)}")
+ax.set_title(f"Daily total predicted rainfall\n{str(day_str)}")
 
-# cb = plt.colorbar(
-#     im, ax=ax, ticks=daily_bins,
-#     fraction=0.046, pad=0.04,
-#     extend='max'
-# )
-# cb.set_label("mm day$^{-1}$")
+cb = plt.colorbar(
+    im, ax=ax, ticks=daily_bins,
+    fraction=0.046, pad=0.04,
+    extend='max'
+)
+cb.set_label("mm day$^{-1}$")
 
-# plt.show()
+plt.show()

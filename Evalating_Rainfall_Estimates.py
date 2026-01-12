@@ -898,7 +898,7 @@ fig, axs = plot_precip_1x2_compare_ghana(
     lats=imerg_ghana_2dmean.latitude.values,
     titles=["IMERG", "ERA5", "CML-SAT"],
     vmin=0,
-    vmax=10
+    vmax=20
 )
 gc.collect()
 
@@ -921,7 +921,7 @@ plot_latitude_profiles(
     imerg_ghana_zonalmean,   #  IMERG 1D DataArray
     era5_ghana_zonalmean,    #  ERA5 1D DataArray
     cml_sat_ghana_zonalmean, #  CML-SAT 1D DataArray
-    xlim=(0, 14),
+    xlim=(0, 40),
     title="Latitudinal Mean Rainfall"
 )
 gc.collect()
@@ -1175,10 +1175,6 @@ cat_df_era5_obs = cat_stats_dict_to_df(
     product_names=["CML-SAT", "IMERG"]
 )
 
-
-
-
-
 make_cat_performance_diagram(cat_df_imerg_obs)
 
 make_cat_performance_diagram(cat_df_era5_obs)
@@ -1284,6 +1280,48 @@ def kstd_by_lat_xr(lat_grid, dtrans=0.5):
                     lat_grid < 8 + dtrans / 2,
                     0.92 + (lat_grid - (8 - dtrans / 2)) / dtrans * (0.95 - 0.92),
                     0.95
+                )
+            )
+        )
+    )
+
+    return kstd.astype("float32")
+
+lat_grid = cml_sat_xarr["y"].broadcast_like(cml_sat_xarr["rain_daily_total"][0])
+kstd_grid = kstd_by_lat_xr(lat_grid)
+
+def kstd_by_lat_xr(lat_grid, dtrans=0.5):
+    """
+    Latitude-dependent kstd with smooth transitions.
+    Tuned to reduce wet bias while preserving convective cores.
+    •	Coastal (<5°): 0.95
+	•	Forest / transition (5–8°): 1.00
+	•	Savanna (>8°): 1.05
+
+    Parameters
+    ----------
+    lat_grid : xr.DataArray
+        Latitude field (2D or 1D, degrees_north)
+    dtrans : float
+        Transition width in degrees (default: 0.5)
+
+    Returns
+    -------
+    kstd : xr.DataArray
+        Smooth kstd field
+    """
+
+    kstd = xr.where(
+        lat_grid < 5 - dtrans / 2, 0.95,  # Coastal Savanna
+        xr.where(
+            lat_grid < 5 + dtrans / 2,
+            0.95 + (lat_grid - (5 - dtrans / 2)) / dtrans * (1.00 - 0.95),
+            xr.where(
+                lat_grid < 8 - dtrans / 2, 1.00,  # Forest / Transition
+                xr.where(
+                    lat_grid < 8 + dtrans / 2,
+                    1.00 + (lat_grid - (8 - dtrans / 2)) / dtrans * (1.05 - 1.00),
+                    1.05  # Guinea Savanna
                 )
             )
         )
