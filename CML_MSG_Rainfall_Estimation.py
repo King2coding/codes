@@ -235,7 +235,7 @@ def kstd_by_lat_xr(lat_grid, dtrans=0.5):
                 xr.where(
                     lat_grid < 8 + dtrans / 2,
                     1.00 + (lat_grid - (8 - dtrans / 2)) / dtrans * (1.05 - 1.00),
-                    1.05  # Guinea Savanna
+                    1.05  # Guinea Savanna and beyond
                 )
             )
         )
@@ -253,6 +253,65 @@ def kstd_by_lat_xr(lat_grid, dtrans=0.5):
 #             0.95
 #         )
 #     ).astype("float32")
+
+def regime_aware_quantile_mean(
+    Yq,
+    qs,
+    scene_values,
+    q_low=0.30,
+    q_high=0.70,
+    low_band=(0.10, 0.30),
+    mid_band=(0.30, 0.70),
+    high_band=(0.70, 0.95),
+):
+    """
+    Regime-aware aggregation of dense quantile predictions.
+
+    Parameters
+    ----------
+    Yq : np.ndarray
+        Shape (N, n_q), monotonic quantile predictions
+    qs : np.ndarray
+        Quantile levels (same length as n_q)
+    scene_values : np.ndarray
+        First-guess rain estimates (posterior mean AFTER patch correction)
+    q_low, q_high : float
+        Scene-relative thresholds for regime separation
+    low_band, mid_band, high_band : tuple
+        Quantile bands to average in each regime
+
+    Returns
+    -------
+    r_out : np.ndarray
+        Regime-adjusted rain estimates (N,)
+    """
+
+    # scene-relative thresholds
+    t_low  = np.nanquantile(scene_values, q_low)
+    t_high = np.nanquantile(scene_values, q_high)
+
+    r_out = np.zeros_like(scene_values, dtype="float32")
+
+    # index masks
+    idx_low  = scene_values <= t_low
+    idx_mid  = (scene_values > t_low) & (scene_values <= t_high)
+    idx_high = scene_values > t_high
+
+    def band_mean(Yq_sub, qmin, qmax):
+        m = (qs >= qmin) & (qs <= qmax)
+        return Yq_sub[:, m].mean(axis=1)
+
+    # apply regime-specific aggregation
+    if idx_low.any():
+        r_out[idx_low] = band_mean(Yq[idx_low], *low_band)
+
+    if idx_mid.any():
+        r_out[idx_mid] = band_mean(Yq[idx_mid], *mid_band)
+
+    if idx_high.any():
+        r_out[idx_high] = band_mean(Yq[idx_high], *high_band)
+
+    return r_out
 
 def correct_wet_mask(bin_rast, 
                      bt_rast, 
@@ -424,6 +483,137 @@ def predict_slice_meanq(time_val,
     # smoothing
     # rain_smooth = smooth_da_mean(rain_map_cor, win=win_smooth)
     return rain_map_cor,  rain_map, #rain_smooth,
+
+#-------------------------
+# Regime aware conditional quantile retrieval version
+def predict_slice_regime_conditional_meanq(
+    time_val,
+    BT_IR108, 
+    BT_IR120, 
+    BT_WV062, 
+    BT_diff,
+    mask_cloud,
+    win_smooth,
+    apply_patch=True,
+    drizzle_floor=0.05,
+):
+    """
+    Regime-aware conditional quantile rainfall retrieval for a single time slice.
+
+    Returns
+    -------
+    rain_final : xr.DataArray
+        Final rainfall estimate (mm h-1) – USE THIS
+    rain_mean : xr.DataArray
+        Posterior-mean rainfall (diagnostic only)
+    """
+
+    # --------------------------------------------------
+    # 1. Gather features
+    # --------------------------------------------------
+    b1 = BT_IR108.sel(time=time_val).where(mask_cloud.sel(time=time_val))
+    b2 = BT_IR120.sel(time=time_val).where(mask_cloud.sel(time=time_val))
+    b3 = BT_WV062.sel(time=time_val).where(mask_cloud.sel(time=time_val))
+    bd = BT_diff .sel(time=time_val).where(mask_cloud.sel(time=time_val))
+
+    valid = (
+        np.isfinite(b1) &
+        np.isfinite(b2) &
+        np.isfinite(b3) &
+        np.isfinite(bd)
+    )
+
+    if valid.sum().item() == 0:
+        out = xr.zeros_like(b1).fillna(0.0)
+        out.name = "R_pred_mm_per_h"
+        out.attrs["units"] = "mm h-1"
+        return out, out
+
+    # --------------------------------------------------
+    # 2. XGBoost dense quantile prediction
+    # --------------------------------------------------
+    X = np.column_stack([
+        b1.values[valid],
+        b2.values[valid],
+        b3.values[valid],
+        bd.values[valid],
+    ]).astype("float32")
+
+    dX = xgb.DMatrix(X, feature_names=feat_names, nthread=18)
+
+    pred_list = [
+        invf(boosters_by_q[q].predict(dX)) for q in qs_dense
+    ]
+
+    Yq = np.column_stack(pred_list).astype("float32")
+    Yq = np.maximum.accumulate(Yq, axis=1)  # enforce non-crossing
+
+    # --------------------------------------------------
+    # 3. First guess: posterior mean
+    # --------------------------------------------------
+    from quantnn.quantiles import posterior_mean
+    r_mean_flat = posterior_mean(Yq, quantiles=qs_dense).astype("float32")
+
+    rain_mean = xr.full_like(b1, 0.0, dtype="float32")
+    rain_mean.values[valid] = np.clip(r_mean_flat, 0.0, None)
+    rain_mean.name = "R_mean_mm_per_h"
+    rain_mean.attrs["units"] = "mm h-1"
+
+    # --------------------------------------------------
+    # 4. Patch correction (AREA control)
+    # --------------------------------------------------
+    rain_patch = rain_mean.copy()
+
+    if apply_patch:
+        lat_grid = b1["y"].broadcast_like(b1)
+        kstd_grid = kstd_by_lat_xr(lat_grid)
+
+        meta = xarray_meta_from_da(b1)
+        wet_grid = (rain_patch.values > 0).astype(np.int16)
+
+        corr_wet = correct_wet_mask(
+            wet_grid,
+            b1.values.astype("float32"),
+            meta,
+            use_std=True,
+            lat_grid=kstd_grid,
+        )
+
+        rain_patch = rain_patch.where(corr_wet == 1, 0.0)
+
+    # --------------------------------------------------
+    # 5. Regime-aware conditional quantile aggregation
+    # --------------------------------------------------
+    scene_vals = rain_patch.values[valid]
+
+    r_regime = regime_aware_quantile_mean(
+        Yq=Yq,
+        qs=qs_dense,
+        scene_values=scene_vals,
+        q_low=0.30,
+        q_high=0.70,
+    )
+
+    rain_final = xr.full_like(b1, 0.0, dtype="float32")
+    rain_final.values[valid] = np.clip(r_regime, 0.0, None)
+    rain_final.name = "R_pred_mm_per_h"
+    rain_final.attrs["units"] = "mm h-1"
+
+    # --------------------------------------------------
+    # 6. Drizzle floor + smoothing
+    # --------------------------------------------------
+    if drizzle_floor is not None:
+        rain_final.values = np.where(
+            rain_final.values < drizzle_floor,
+            0.0,
+            rain_final.values
+        )
+
+    if (win_smooth[0] == "Yes") and (win_smooth > 1):
+        rain_final = smooth_da_mean(rain_final, win=win_smooth)
+
+    return rain_final, rain_mean
+#-------------------------
 
 # -------------------------
 # OPEN + REPROJECT + CLIP + INTERP (per day)
