@@ -543,3 +543,47 @@ x.legend()
 # sh_seasn = season
 # nh_seasn = {'Summer': 'Winter', 'Autumn': 'Spring', 
 #             'Winter': 'Summer', 'Spring': 'Autumn'}[season]
+
+
+#%%
+def decide_correction_mode(hemisphere, season, lat_range, surface_name):
+    """
+    Decide correction strategy using climatology + geometry.
+    """
+
+    valid_map = get_custom_surface_type_mapping(
+        hemisphere, season, lat_range
+    )
+
+    # -------------------------
+    # Tier 3: surface not expected
+    # -------------------------
+    if surface_name not in valid_map.values():
+        return "GLOBAL"
+
+    # -------------------------
+    # Tier 1: LUT-safe surfaces
+    # -------------------------
+    if surface_name == "water":
+        return "LUT"
+
+    if surface_name == "ice" and season in ["Winter"]:
+        return "LUT"
+
+    if surface_name == "snow-covered land" and season in ["Winter"]:
+        return "LUT"
+
+    # Snow-free land: CONDITIONAL
+    if surface_name == "snow-free land":
+        if hemisphere == "NH" and season in ["Summer", "Spring"] and lat_range in [(45,53), (53,61)]:
+            return "LUT"
+        if hemisphere == "SH" and season in ["Summer", "Spring"] and lat_range in [(-53,-45), (-61,-53)]:
+            return "LUT"
+
+        # otherwise transitional
+        return "CURVE"
+
+    # -------------------------
+    # Tier 2 fallback
+    # -------------------------
+    return "CURVE"
