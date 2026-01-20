@@ -69,7 +69,7 @@ nc_files = [
 gc.collect()
 #%%
 print('********* The group data *********')
-var2process = 'temp_11_0um_nom'
+var2process = 'temp_12_0um_nom'
 var_nme_sve = var2process.replace('_0um_nom','')
 start_time = time.time()
 
@@ -142,8 +142,10 @@ for season in seasonal_files.keys():
 
     # save lut for each hemisphere and season
     for ke, dta in data_dict.items():
-        lut_name = os.path.join(df_dir,f'{var_nme_sve}_{ke}_{cde_run_dte}.csv')
-        dta.to_csv(lut_name, index=False)
+        # lut_name = os.path.join(df_dir,f'{var_nme_sve}_{ke}_{cde_run_dte}.csv')
+        lut_name = os.path.join(df_dir,f'{var_nme_sve}_{ke}_{cde_run_dte}.pkl')
+        # dta.to_csv(lut_name, index=False)
+        dta.to_pickle(lut_name)
     del(ke,dta)
 
     gc.collect()
