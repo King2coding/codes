@@ -53,11 +53,13 @@ surface_type_mapping = {
 latitude_windows = {
     'SH': {
         'window1': (-75, -61),
-        'window2': (-61, -53)
+        'window2': (-61, -53),
+        'window3': (-53, -45)
     },
     'NH': {
         'window1': (61, 75),
-        'window2': (53, 61)
+        'window2': (53, 61),
+        'window3': (45, 53)
     }
 }
 
@@ -66,12 +68,16 @@ latitude_windows = {
 combinations = [
     ('SH', 'Summer', latitude_windows['SH']['window1']),
     ('SH', 'Summer', latitude_windows['SH']['window2']),
+    ('SH', 'Summer', latitude_windows['SH']['window3']),
     ('SH', 'Autumn', latitude_windows['SH']['window1']),
     ('SH', 'Autumn', latitude_windows['SH']['window2']),
+    ('SH', 'Autumn', latitude_windows['SH']['window3']),
     ('SH', 'Winter', latitude_windows['SH']['window1']),
     ('SH', 'Winter', latitude_windows['SH']['window2']),
+    ('SH', 'Winter', latitude_windows['SH']['window3']),
     ('SH', 'Spring', latitude_windows['SH']['window1']),
-    ('SH', 'Spring', latitude_windows['SH']['window2'])
+    ('SH', 'Spring', latitude_windows['SH']['window2']),
+    ('SH', 'Spring', latitude_windows['SH']['window3']),
 ]
 
 #%%
@@ -79,6 +85,10 @@ combinations = [
 # Customized surface type mapping based on hemisphere, season, and latitude range
 def get_custom_surface_type_mapping(hemisphere, season, lat_range):
     seesns = ['Summer', 'Autumn', 'Winter', 'Spring']
+
+     # -------------------------
+    # Southern Hemisphere
+    # -------------------------
     
     if hemisphere == 'SH':
         
@@ -93,11 +103,26 @@ def get_custom_surface_type_mapping(hemisphere, season, lat_range):
                 0: 'water',
                 1: 'snow-free land'
             }
+        
         elif (season in ['Autumn', 'Winter']) and (lat_range == (-61, -53)):
             return {
                 0: 'water',
                 3: 'ice'
             }
+        
+        elif (season in ['Summer', 'Spring']) and (lat_range == (-53, -45)):
+            return {
+                0: 'water',               
+            }
+        elif (season in ['Winter', 'Autumn']) and (lat_range == (-53, -45)):
+            return {
+                0: 'water',
+                # 3: 'ice'
+            }
+        
+    # -------------------------
+    # Northern Hemisphere
+    # -------------------------
         
     elif hemisphere == 'NH':
         if (season in ['Winter', 'Autumn']) and (lat_range == (61, 75)):
@@ -124,6 +149,20 @@ def get_custom_surface_type_mapping(hemisphere, season, lat_range):
                 2: 'snow-covered land',
                 3: 'ice'
             }
+        
+        elif (season in ['Spring', 'Summer']) and (lat_range == (45, 53)):
+            return {
+                0: 'water',
+                1: 'snow-free land'
+            }
+        
+        elif (season in ['Winter', 'Autumn']) and (lat_range == (45, 53)):
+            return {
+                0: 'water',
+                2: 'snow-covered land',
+                3: 'ice'
+            }
+
 #---------------------------------------------- 
 #*************  ✨ Codeium Command 🌟  *************/
 def nonnan_to_df(array):
@@ -922,7 +961,6 @@ def get_LUT(group_data, nadir_bins, nadir_hist, data_range, lat_window, surface_
         adjusted_limb_bins_list[i] = adjusted_limb_bins
         nadir_hist_list[i] = nadir_hist_norm
         nadir_bin_list[i] = nadir_bins  
-
         # Populate lookup table
         for orig_tb, corr_tb in zip(limb_bins, adjusted_limb_bins):
             lookup_table.append({            
@@ -1028,6 +1066,7 @@ def grab_limb_stats_elements(group_df_dicts, group_data_rnges,
     for k in dict_keys:
         print(f"Processing {k}")
         lat_wind = k.split('_')[2]
+        lat_wind = tuple(map(int, lat_wind.strip('()').split(',')))
         group_df_dict = group_df_dicts[k]
         group_dat_rng = group_data_rnges[k]
 
