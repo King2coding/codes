@@ -57,6 +57,14 @@ def nested_dict():
 def is_limb(beam):
     return (beam < NADIR_MIN) or (beam > NADIR_MAX)
 
+def to_plain_dict(obj):
+    """
+    Recursively convert defaultdicts to plain dicts.
+    """
+    if isinstance(obj, dict):
+        return {k: to_plain_dict(v) for k, v in obj.items()}
+    return obj
+
 # — Aggregate by beam
 def aggregate_by_beam(df, agg="median"):
     """
@@ -72,6 +80,7 @@ def aggregate_by_beam(df, agg="median"):
 def fit_geometry_curve(stats_df, order=5):
     """
     Fit polynomial correction curve vs scan geometry.
+    Stores ONLY coefficients (no callable objects).
     """
     beams = stats_df["beam_position"].to_numpy()
     corr  = stats_df["corr_coeff"].to_numpy()
@@ -79,13 +88,19 @@ def fit_geometry_curve(stats_df, order=5):
     x = beams - NADIR_CENTER
     coeffs = np.polyfit(x, corr, order)
 
-    poly = np.poly1d(coeffs)
-
     return {
         "coeffs": coeffs,
         "order": order,
-        "poly": poly
+        "beam_center": NADIR_CENTER,
+        "n_points": len(stats_df)
     }
+
+def eval_geometry_curve(beam_position, coeffs, beam_center):
+    """
+    Evaluate polynomial geometry correction.
+    """
+    x = beam_position - beam_center
+    return np.polyval(coeffs, x)
 
 #— Build GLOBAL geometry (season-aware)
 def build_global_geometry(df, agg="median", order=5):
@@ -166,11 +181,14 @@ global_curve, curve_lib = build_all_geometry(
 # corr  = curve(-200)
 
 path_to_sve = r'/ra1/pubdat/AVHRR_CloudSat_proj/AVHRR/ir_correction_LUTs'
+global_curve_plain = to_plain_dict(global_curve)
+curve_lib_plain    = to_plain_dict(curve_lib)
+
 with open(os.path.join(path_to_sve, "global_geometry.pkl"), "wb") as f:
-    pickle.dump(global_curve, f)
+    pickle.dump(global_curve_plain, f)
 
 with open(os.path.join(path_to_sve, "surface_geometry.pkl"), "wb") as f:
-    pickle.dump(curve_lib, f)
+    pickle.dump(curve_lib_plain, f)
 
 
 #%% Sanity check plots
@@ -192,8 +210,15 @@ NADIR_CENTER = N_BEAMS // 2  # 204
 # --------------------------------------------------
 # Fetch polynomial
 # --------------------------------------------------
-poly = global_curve[var][hemisphere][season][lat_bin]["poly"]
+# poly = global_curve[var][hemisphere][season][lat_bin]["poly"]
+
 # curve_lib[var][hemisphere][season][lat_bin][surface_code]["poly"]
+
+entry = global_curve[var][hemisphere][season][lat_bin]
+
+coeffs = entry["coeffs"]
+beam_center = entry["beam_center"]
+
 
 # --------------------------------------------------
 # Beam positions
@@ -204,7 +229,9 @@ x = beam - NADIR_CENTER   # geometry coordinate
 # --------------------------------------------------
 # Evaluate correction
 # --------------------------------------------------
-corr = poly(x)
+# corr = poly(x)
+corr = eval_geometry_curve(beam, coeffs, beam_center)
+
 
 NADIR_MIN = NADIR_CENTER - 50
 NADIR_MAX = NADIR_CENTER + 50
