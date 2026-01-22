@@ -290,6 +290,7 @@ def plot_ir_tb_distribution_with_means_normal_version(
 def plot_discrete_ir_tb_distribution(orig_hists, orig_bin_edges, orig_beam_means,
                                      cor_hists, cor_bin_edges, cor_beam_means,
                                      beam_positions, save_path):
+    
     """
     Plot the IR Tbs distribution stratified by beam positions with mean IR Tbs,
     mimicking a discrete plot style.
