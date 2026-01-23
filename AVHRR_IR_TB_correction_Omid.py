@@ -365,12 +365,12 @@ def eval_geometry_curve(beam_position, coeffs):
     x = beam_position - NADIR_CENTER
     return np.polyval(coeffs, x)
 #-----------------------------------
-def apply_global_curve(
-    global_curve, var, hemisphere, season, lat_bin, beam, obs_tb
-):
-    poly = global_curve[var][hemisphere][season][lat_bin]["poly"]
-    corr = poly(beam - NADIR_CENTER)
-    return obs_tb * corr
+# def apply_global_curve(
+#     global_curve, var, hemisphere, season, lat_bin, beam, obs_tb
+# ):
+#     poly = global_curve[var][hemisphere][season][lat_bin]["poly"]
+#     corr = poly(beam - NADIR_CENTER)
+#     return obs_tb * corr
 
 #-----------------------------------
 def decide_correction_mode(
@@ -796,7 +796,7 @@ x.legend()
 #%% do some dist stts to be sure
 fle = r'/ra1/pubdat/AVHRR_CloudSat_proj/AVHRR_AutoSnow_collocated_1998_2000_for_Kingsley'
 
-all_files_avhrr = [os.path.join(fle,f) for f in os.listdir(fle) if f.endswith('.nc')][:50]
+all_files_avhrr = [os.path.join(fle,f) for f in os.listdir(fle) if f.endswith('.nc')][:100]
 
 cor_files = [correct_file_vectorized(file) for file in all_files_avhrr]
 

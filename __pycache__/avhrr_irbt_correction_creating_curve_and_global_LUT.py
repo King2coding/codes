@@ -200,12 +200,14 @@ import matplotlib.pyplot as plt
 # --------------------------------------------------
 var = "temp_11"
 hemisphere = "NH"
-season = "Summer"
-lat_bin = "61-75"
-surface_code = 2  
-
+season = "Autumn"
+lat_bin = "53-61"
+surface_code = 3
+# surftype = surface_type_mapping[surface_code]
 N_BEAMS = 409
 NADIR_CENTER = N_BEAMS // 2  # 204
+
+curve_type = "surface"  # "global" or "surface"
 
 # --------------------------------------------------
 # Fetch polynomial
@@ -213,8 +215,10 @@ NADIR_CENTER = N_BEAMS // 2  # 204
 # poly = global_curve[var][hemisphere][season][lat_bin]["poly"]
 
 # curve_lib[var][hemisphere][season][lat_bin][surface_code]["poly"]
-
-entry = global_curve[var][hemisphere][season][lat_bin]
+if curve_type == "global":
+    entry = global_curve[var][hemisphere][season][lat_bin]
+else:
+    entry = curve_lib[var][hemisphere][season][lat_bin][surface_code]
 
 coeffs = entry["coeffs"]
 beam_center = entry["beam_center"]
@@ -254,7 +258,12 @@ plt.axvline(NADIR_CENTER, color="gray", ls="--", lw=1)
 
 plt.xlabel("Beam position")
 plt.ylabel("Correction coefficient")
-plt.title(f"{var} | {hemisphere} {season} | lat {lat_bin} | {surface_type_mapping[surface_code]} (masked)")
+
+if curve_type == "global":
+    plt.title(f"{var} | {hemisphere} {season} | lat {lat_bin} | Global CURVE")
+
+else:
+    plt.title(f"{var} | {hemisphere} {season} | lat {lat_bin} | {surface_type_mapping[surface_code]} CURVE")
 
 plt.legend()
 plt.grid(alpha=0.3)
