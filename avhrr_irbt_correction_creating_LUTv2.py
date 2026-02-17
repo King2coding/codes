@@ -23,10 +23,16 @@ all_noaa_data = r'/ra1/pubdat/AVHRR_CloudSat_proj/AVHRR_AutoSnow_collocated_1998
 # years = sorted([int(i) for i in os.listdir(base_path)])
 
 # Select 1998 NOAA-14 files identified by "NJ" in the file name
+# all_noaa_files = sorted([
+#     os.path.join(all_noaa_data, s) 
+#     for s in os.listdir(all_noaa_data) 
+#     if s.endswith('.nc') and "NJ" in s and "D98" in s
+# ])
+
 all_noaa_files = sorted([
     os.path.join(all_noaa_data, s) 
     for s in os.listdir(all_noaa_data) 
-    if s.endswith('.nc') and "NJ" in s and "D98" in s
+    if s.endswith('.nc')
 ])
 
 # organize file by seasons and hemisphere
@@ -76,6 +82,8 @@ start_time = time.time()
 print(f'processing group data for {var2process}')
 
 for season in seasonal_files.keys():
+    # --- per-season timer ---
+    season_start_time = time.time()
     # Process each season individually
     # season = 'Summer'
     season_files = seasonal_files[season]
@@ -173,6 +181,10 @@ for season in seasonal_files.keys():
                                     'corr_coeff', np.arange(0, 410, 50).tolist(), 
                                     ttle, plt_nme) 
                 gc.collect()
+    # --- per-season elapsed print ---
+    season_elapsed = time.time() - season_start_time
+    print(f"Elapsed time for season {season}: {season_elapsed:.2f} s "
+        f"({season_elapsed/60:.2f} min) ({season_elapsed/3600:.5f} hr)")
 
     print('********* The line plot *********')
 

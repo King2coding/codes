@@ -576,9 +576,58 @@ df_53_61_sh = dfs[dfs['latitude_bin'] == '-61--53'].copy()
 df = df_53_61_nh
 plot_geometry_by_season(df)
 
+df_grby = df.groupby('beam_position')[['original_tb','corrected_tb']].mean().reset_index()
+df_grby.plot(x='beam_position', y=['original_tb','corrected_tb'], figsize=(12,5), 
+             title='Original vs Corrected TB by Beam Position')
+
+# Break the line in the nadir region (choose which series you want to "gap")
+mask_nadir = df_grby['beam_position'].between(NADIR_MIN, NADIR_MAX)
+
+df_plot = df_grby.copy()
+df_plot.loc[mask_nadir, ['original_tb','corrected_tb']] = np.nan   # gap both
+# or, if you only want to show "no correction done" by gapping corrected only:
+# df_plot.loc[mask_nadir, 'corrected_tb'] = np.nan
+
+ax = df_plot.plot(
+    x='beam_position',
+    y=['original_tb','corrected_tb'],
+    figsize=(12,5),
+    title='Original vs Corrected TB by Beam Position'
+)
+
+# Optional: shade the excluded nadir region + center line (like your curve plot)
+ax.axvspan(NADIR_MIN, NADIR_MAX, color='0.85', alpha=0.6, label='Nadir excluded')
+ax.axvline(NADIR_CENTER, color='0.4', ls='--', lw=1)
+
+ax.set_xlabel("beam_position")
+ax.set_ylabel("Mean TB (K)")
+ax.legend(loc='best')
+plt.show()
 #-------------------------------
+cnt = df.groupby('beam_position').size().reset_index(name='n_samples').sort_values('beam_position')
+# Break the line in the nadir region (choose which series you want to "gap")
+mask_nadir = df_grby['beam_position'].between(NADIR_MIN, NADIR_MAX)
 
+df_plot = cnt.copy()
+df_plot.loc[mask_nadir, 'n_samples'] = np.nan   # gap both
+# or, if you only want to show "no correction done" by gapping corrected only:
+# df_plot.loc[mask_nadir, 'corrected_tb'] = np.nan
 
+ax = df_plot.plot(
+    x='beam_position',
+    y='n_samples',
+    figsize=(12,5),
+    title='Number of Samples by Beam Position'
+)
+
+# Optional: shade the excluded nadir region + center line (like your curve plot)
+ax.axvspan(NADIR_MIN, NADIR_MAX, color='0.85', alpha=0.6, label='Nadir excluded')
+ax.axvline(NADIR_CENTER, color='0.4', ls='--', lw=1)
+
+ax.set_xlabel("beam_position")
+ax.set_ylabel("Number of Samples")
+ax.legend(loc='best')
+plt.show()
 
 #-------------------------------
 
