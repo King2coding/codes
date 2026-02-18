@@ -13,6 +13,7 @@ path_to_1998_n14_data = r'/ra1/pubdat/AVHRR_CloudSat_proj/AVHRR/frequency_analys
 summer_data = r'/ra1/pubdat/AVHRR_CloudSat_proj/AVHRR_1998_summer_for_Kingsley'
 all_noaa_data = r'/ra1/pubdat/AVHRR_CloudSat_proj/AVHRR_AutoSnow_collocated_1998_2000_for_Kingsley'
 #%%
+
 # floating variables
 """
 0: water
@@ -36,8 +37,9 @@ all_noaa_files = sorted([
 ])
 
 # organize file by seasons and hemisphere
-seasonal_files = organize_files_by_season_in_hemisphere(all_noaa_files,'SH',1998)
-
+seasonal_files = organize_files_by_season_in_hemisphere(all_noaa_files,'SH',None)
+for k in seasonal_files.keys():
+    print(f"{k}: {len(seasonal_files[k])} files")
 # # choose only 1 hemisphere
 # hemisphere_sh = "Southern"  # Change to 'Northern' for the Northern Hemisphere
 # # hemisphere_sh = "Northern"  # Change to 'Northern' for the Northern Hemisphere
@@ -59,15 +61,13 @@ seasonal_files = organize_files_by_season_in_hemisphere(all_noaa_files,'SH',1998
 
 # summer_files = [os.path.join(summer_data,s) for s in os.listdir(summer_data) if s.endswith('.nc')] 
 
-file2run = next((f for f in all_noaa_files if "clavrx_NSS.GHRR.NJ.D98015.S1728.E1912.B156" in f), None)
+# file2run = next((f for f in all_noaa_files if "clavrx_NSS.GHRR.NJ.D98015.S1728.E1912.B156" in f), None)
 
-cde_run_dte = str(date.today().strftime('%Y%m%d'))
-
-nc_files = [
-    os.path.join(dirpath, filename)
-    for dirpath, _, filenames in os.walk(path_to_1998_n14_data)
-    for filename in filenames if filename.endswith(".nc")
-]
+# nc_files = [
+#     os.path.join(dirpath, filename)
+#     for dirpath, _, filenames in os.walk(path_to_1998_n14_data)
+#     for filename in filenames if filename.endswith(".nc")
+# ]
 
 # sh_lat_wind = latitude_windows['SH']['window1']
 # nh_lat_wind = latitude_windows['NH']['window1']
@@ -79,7 +79,7 @@ var2process = 'temp_12_0um_nom'
 var_nme_sve = var2process.replace('_0um_nom','')
 start_time = time.time()
 
-print(f'processing group data for {var2process}')
+print(f'processing group data for {var_nme_sve}')
 
 for season in seasonal_files.keys():
     # --- per-season timer ---
@@ -205,7 +205,7 @@ for season in seasonal_files.keys():
                                         nadir_hist_lst_by_srftyp, plot_dir, cde_run_dte, lat_w)
         gc.collect()
 
-        print(f"Completed processing for season: {season}")
+    print(f"Completed processing and plotting for season: {season}")
 #--------------------------------------------------------
 
 # End time of code

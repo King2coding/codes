@@ -29,6 +29,8 @@ import multiprocessing as mp
 
 
 #%%
+cde_run_dte = str(date.today().strftime('%Y%m%d'))
+
 # flaoting variables
 beam_positions = np.array(range(409))
 nadir_beam_position = int(np.median(beam_positions))
