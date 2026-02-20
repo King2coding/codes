@@ -35,85 +35,85 @@ coupled_linkdata.to_csv(out_fname, index=False)
 
 print('Done!')
 #%%
-# cml = os.path.join(cml_data_path, 'Schedule_pfm_SDH_20250628094756281472127001024_1.txt')
-# cml_dat_df = pd.read_csv(cml, header=0, sep='\t')  # assumes headers are present and identical
+cml = os.path.join(cml_data_path, 'Schedule_pfm_SDH_20250613095545281472135393728_1.txt')
+cml_dat_df = pd.read_csv(cml, header=0, sep='\t')  # assumes headers are present and identical
 
-# # Construct an ID to distinguish between sublinks, antennas, and polarizations across a single path
-# cml_dat_df['Monitored_ID'] = (cml_dat_df['NEName'].astype(str) + '-' +
-#                                 cml_dat_df['BrdID'].astype(str) + '-' +
-#                                 cml_dat_df['BrdName'].astype(str) + '-' +
-#                                 cml_dat_df['PortNO'].astype(str) + '(' +
-#                                 cml_dat_df['PortName'].astype(str) + ')-' +
-#                                 cml_dat_df['PathID'].astype(str))
+# Construct an ID to distinguish between sublinks, antennas, and polarizations across a single path
+cml_dat_df['Monitored_ID'] = (cml_dat_df['NEName'].astype(str) + '-' +
+                                cml_dat_df['BrdID'].astype(str) + '-' +
+                                cml_dat_df['BrdName'].astype(str) + '-' +
+                                cml_dat_df['PortNO'].astype(str) + '(' +
+                                cml_dat_df['PortName'].astype(str) + ')-' +
+                                cml_dat_df['PathID'].astype(str))
 
-# # Add polarization column
-# cml_dat_df['Polarization'] = cml_dat_df['Monitored_ID'].apply(extract_polarization)
+# Add polarization column
+cml_dat_df['Polarization'] = cml_dat_df['Monitored_ID'].apply(extract_polarization)
 
-# # Merge CML data with metadata
-# cml_data = pd.merge(cml_dat_df, matched_metadata, on=['Monitored_ID'])
+# Merge CML data with metadata
+cml_data = pd.merge(cml_dat_df, matched_metadata, on=['Monitored_ID'])
 
-# # Handle unmatched polarizations
-# cml_data['Polarization'] = np.where((cml_data['Polarization_x'] != cml_data['Polarization_y']) &
-#                                     ~(cml_data['Polarization_x'].isin(['H', 'V'])),
-#                                     cml_data['Polarization_y'],
-#                                     cml_data['Polarization_x'])
+# Handle unmatched polarizations
+cml_data['Polarization'] = np.where((cml_data['Polarization_x'] != cml_data['Polarization_y']) &
+                                    ~(cml_data['Polarization_x'].isin(['H', 'V'])),
+                                    cml_data['Polarization_y'],
+                                    cml_data['Polarization_x'])
 
-# # Drop unnecessary columns
-# cml_data = cml_data.drop(columns=['ONEID', 'ONEName', 'NEID', 'NEType',
-#                                     'NEName', 'BrdID', 'BrdName', 'PortNO', 'PortName', 'PathID',
-#                                     'ShelfID', 'BrdType', 'PortID', 'MOType',
-#                                     'FBName', 'EventID', 'PMParameterName', 'PMLocationID',
-#                                     'PMLocation', 'UpLevel', 'DownLevel', 'ResultOfLevel',
-#                                     'Unnamed: 27', 'Polarization_x', 'Temp_ID', 'Polarization_y',
-#                                     'ATPC'])
+# Drop unnecessary columns
+cml_data = cml_data.drop(columns=['ONEID', 'ONEName', 'NEID', 'NEType',
+                                    'NEName', 'BrdID', 'BrdName', 'PortNO', 'PortName', 'PathID',
+                                    'ShelfID', 'BrdType', 'PortID', 'MOType',
+                                    'FBName', 'EventID', 'PMParameterName', 'PMLocationID',
+                                    'PMLocation', 'UpLevel', 'DownLevel', 'ResultOfLevel',
+                                    'Unnamed: 27', 'Polarization_x', 'Temp_ID', 'Polarization_y',
+                                    'ATPC'])
 
-# # Columns to group by
-# group_columns = ['Monitored_ID', 'Far_end_ID', 'Polarization', 'Period', 'EndTime']
+# Columns to group by
+group_columns = ['Monitored_ID', 'Far_end_ID', 'Polarization', 'Period', 'EndTime']
 
-# # Process TSL data
-# df_tsl = cml_data.copy()
-# flattened_tsl_rows = []
-# for group_keys, group_data in df_tsl.groupby(group_columns):
-#     row = dict(zip(group_columns, group_keys))
-#     for event in ['TSL_MIN', 'TSL_MAX', 'TSL_CUR', 'TSL_AVG']:
-#         row[event] = get_event_value_or_return_nan(group_data, event)
-#     flattened_tsl_rows.append(row)
-# tsl_flattened = pd.DataFrame(flattened_tsl_rows)
+# Process TSL data
+df_tsl = cml_data.copy()
+flattened_tsl_rows = []
+for group_keys, group_data in df_tsl.groupby(group_columns):
+    row = dict(zip(group_columns, group_keys))
+    for event in ['TSL_MIN', 'TSL_MAX', 'TSL_CUR', 'TSL_AVG']:
+        row[event] = get_event_value_or_return_nan(group_data, event)
+    flattened_tsl_rows.append(row)
+tsl_flattened = pd.DataFrame(flattened_tsl_rows)
 
-# # Process RSL data
-# df_rsl = cml_data.copy()
-# df_rsl = df_rsl.rename(columns={'Monitored_ID': 'Far_end_ID', 'Far_end_ID': 'Monitored_ID'})
-# flattened_rsl_rows = []
-# for group_keys, group_data in df_rsl.groupby(group_columns):
-#     row = dict(zip(group_columns, group_keys))
-#     for event in ['RSL_MIN', 'RSL_MAX', 'RSL_CUR', 'RSL_AVG']:
-#         row[event] = get_event_value_or_return_nan(group_data, event)
-#     flattened_rsl_rows.append(row)
-# rsl_flattened = pd.DataFrame(flattened_rsl_rows)
+# Process RSL data
+df_rsl = cml_data.copy()
+df_rsl = df_rsl.rename(columns={'Monitored_ID': 'Far_end_ID', 'Far_end_ID': 'Monitored_ID'})
+flattened_rsl_rows = []
+for group_keys, group_data in df_rsl.groupby(group_columns):
+    row = dict(zip(group_columns, group_keys))
+    for event in ['RSL_MIN', 'RSL_MAX', 'RSL_CUR', 'RSL_AVG']:
+        row[event] = get_event_value_or_return_nan(group_data, event)
+    flattened_rsl_rows.append(row)
+rsl_flattened = pd.DataFrame(flattened_rsl_rows)
 
-# # Merge TSL and RSL dataframes
-# cml_data_flattened = pd.merge(tsl_flattened, rsl_flattened, on=group_columns)
+# Merge TSL and RSL dataframes
+cml_data_flattened = pd.merge(tsl_flattened, rsl_flattened, on=group_columns)
 
-# # Add metadata columns back
-# metadata_cols = ['Frequency', 'XStart', 'YStart', 'XEnd', 'YEnd', 'PathLength']
-# cml_data_unique_metadata = cml_data[group_columns + metadata_cols].drop_duplicates()
-# cml_data_flattened = pd.merge(cml_data_flattened, cml_data_unique_metadata, how='left', on=group_columns)
+# Add metadata columns back
+metadata_cols = ['Frequency', 'XStart', 'YStart', 'XEnd', 'YEnd', 'PathLength']
+cml_data_unique_metadata = cml_data[group_columns + metadata_cols].drop_duplicates()
+cml_data_flattened = pd.merge(cml_data_flattened, cml_data_unique_metadata, how='left', on=group_columns)
 
-# # Filter and process data
-# linkdata = cml_data_flattened.copy()
-# linkdata = linkdata.dropna(subset=['TSL_MIN', 'TSL_MAX', 'TSL_AVG', 'TSL_CUR'])
-# linkdata['Pmin'] = linkdata['RSL_MIN'] - linkdata['TSL_AVG']
-# linkdata['Pmax'] = linkdata['RSL_MAX'] - linkdata['TSL_AVG']
-# linkdata['ID'] = linkdata['Monitored_ID'] + '>>' + linkdata['Far_end_ID']
-# linkdata = linkdata.drop(columns=['Monitored_ID', 'Far_end_ID', 'Period'])
-# linkdata = linkdata.rename(columns={'EndTime': 'DateTime'})
-# linkdata['Frequency'] = linkdata['Frequency'] / 1000  # convert to GHz
-# linkdata['DateTime'] = pd.to_datetime(linkdata['DateTime'], utc=True).dt.strftime('%Y%m%d%H%M')
+# Filter and process data
+linkdata = cml_data_flattened.copy()
+linkdata = linkdata.dropna(subset=['TSL_MIN', 'TSL_MAX', 'TSL_AVG', 'TSL_CUR'])
+linkdata['Pmin'] = linkdata['RSL_MIN'] - linkdata['TSL_AVG']
+linkdata['Pmax'] = linkdata['RSL_MAX'] - linkdata['TSL_AVG']
+linkdata['ID'] = linkdata['Monitored_ID'] + '>>' + linkdata['Far_end_ID']
+linkdata = linkdata.drop(columns=['Monitored_ID', 'Far_end_ID', 'Period'])
+linkdata = linkdata.rename(columns={'EndTime': 'DateTime'})
+linkdata['Frequency'] = linkdata['Frequency'] / 1000  # convert to GHz
+linkdata['DateTime'] = pd.to_datetime(linkdata['DateTime'], utc=True).dt.strftime('%Y%m%d%H%M')
 
-# # Reorder columns
-# order_columns = ['Frequency', 'DateTime', 'Pmin', 'Pmax', 'XStart', 'YStart', 'XEnd', 'YEnd', 'ID',
-#                     'Polarization', 'PathLength', 'TSL_AVG']
-# linkdata = linkdata[order_columns]
+# Reorder columns
+order_columns = ['Frequency', 'DateTime', 'Pmin', 'Pmax', 'XStart', 'YStart', 'XEnd', 'YEnd', 'ID',
+                    'Polarization', 'PathLength', 'TSL_AVG']
+linkdata = linkdata[order_columns]
 
 #%%
 # some sanity check
@@ -146,3 +146,5 @@ print('Done!')
 # ax[0].grid(True)
 # ax[1].grid(True)
 # plt.show()
+
+

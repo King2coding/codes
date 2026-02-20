@@ -312,7 +312,111 @@ def regime_aware_quantile_mean(
         r_out[idx_high] = band_mean(Yq[idx_high], *high_band)
 
     return r_out
+#---------------------------
+def low_or_q70_quantile_reducer(
+    Yq,
+    qs,
+    q_thresh=0.30,
+    q_high=0.70,
+):
+    """
+    Minimal pixel-local conditional quantile reducer.
 
+    Rule:
+    - If posterior mean < Q(q_thresh): mean of quantiles <= q_thresh
+    - Else: use Q(q_high)
+
+    Parameters
+    ----------
+    Yq : np.ndarray
+        Shape (N, n_q), monotonic quantile predictions
+    qs : np.ndarray
+        Quantile levels
+
+    Returns
+    -------
+    r_out : np.ndarray
+        Reduced rainfall estimate (N,)
+    """
+
+    from quantnn.quantiles import posterior_mean
+
+    r_mean = posterior_mean(Yq, quantiles=qs)
+
+    i_qth   = np.searchsorted(qs, q_thresh)
+    i_qhigh = np.searchsorted(qs, q_high)
+
+    low_q_mask = qs <= q_thresh
+
+    r_out = np.empty_like(r_mean, dtype="float32")
+
+    low_mask = r_mean < Yq[:, i_qth]
+
+    # low intensities → mean of low quantiles
+    if low_mask.any():
+        r_out[low_mask] = Yq[low_mask][:, low_q_mask].mean(axis=1)
+
+    # all others → fixed upper-mid quantile
+    if (~low_mask).any():
+        r_out[~low_mask] = Yq[~low_mask, i_qhigh]
+
+    return r_out
+#---------------------------
+
+def regime_aware_quantile_mean_local(
+    Yq,
+    qs,
+    r_mean,
+    q_low=0.30,
+    q_high=0.70,
+):
+    """
+    Per-pixel regime-aware quantile aggregation.
+
+    Parameters
+    ----------
+    Yq : ndarray (N, nq)
+        Quantile predictions per pixel
+    qs : ndarray (nq,)
+        Quantile levels (ascending)
+    r_mean : ndarray (N,)
+        Posterior mean rainfall (mm h-1)
+    q_low, q_high : float
+        Regime split thresholds in percentile space
+
+    Returns
+    -------
+    r_regime : ndarray (N,)
+        Regime-aware rainfall estimate
+    """
+
+    # scene-wide reference (robust)
+    p30 = np.percentile(r_mean, 30)
+    p70 = np.percentile(r_mean, 70)
+
+    low_mask  = r_mean < p30
+    mid_mask  = (r_mean >= p30) & (r_mean <= p70)
+    high_mask = r_mean > p70
+
+    r_out = np.zeros_like(r_mean, dtype="float32")
+
+    # LOW: conservative (suppress drizzle inflation)
+    m = (qs >= 0.10) & (qs <= 0.30)
+    if m.any():
+        r_out[low_mask] = Yq[low_mask][:, m].mean(axis=1)
+
+    # MID: posterior-stable
+    m = (qs >= 0.30) & (qs <= 0.70)
+    if m.any():
+        r_out[mid_mask] = Yq[mid_mask][:, m].mean(axis=1)
+
+    # HIGH: allow intensity, but not runaway
+    m = (qs >= 0.70) & (qs <= 0.90)
+    if m.any():
+        r_out[high_mask] = Yq[high_mask][:, m].mean(axis=1)
+
+    return r_out
+#--------------------------
 def correct_wet_mask(bin_rast, 
                      bt_rast, 
                      meta, 
@@ -400,6 +504,42 @@ def xarray_meta_from_da(da):
     transform = from_bounds(xmin, ymin, xmax, ymax, width, height)
     return {"height": height, "width": width, "transform": transform, "dtype": "float32"}
 
+#-------------------------
+def apply_rcmq_cap(
+    r_rcmq,
+    Yq,
+    qs,
+    r_mean,
+    scene_vals,
+    q_cap=0.85,
+    alpha=1.15,
+    beta=1.20,
+):
+    """
+    Apply local + area-aware cap to RCMQ output.
+    """
+
+    # quantile-based absolute ceiling
+    q_idx = np.searchsorted(qs, q_cap)
+    q_idx = min(q_idx, len(qs) - 1)
+    q_cap_vals = Yq[:, q_idx]          # (N,)
+
+    # scene-wide reference (scalar)
+    scene_med = np.median(scene_vals)
+
+    # broadcast scalar → vector
+    scene_cap = np.full_like(r_mean, beta * scene_med)
+
+    # final cap (element-wise)
+    cap = np.minimum.reduce([
+        q_cap_vals,
+        alpha * r_mean,
+        scene_cap,
+    ])
+
+    return np.minimum(r_rcmq, cap)
+
+#-------------------------
 
 def predict_slice_meanq(time_val, 
                         BT_IR108, BT_IR120, BT_WV062, BT_diff,
@@ -486,24 +626,147 @@ def predict_slice_meanq(time_val,
 
 #-------------------------
 # Regime aware conditional quantile retrieval version
+# def predict_slice_regime_conditional_meanq(
+#     time_val,
+#     BT_IR108,
+#     BT_IR120,
+#     BT_WV062,
+#     BT_diff,
+#     mask_cloud,
+#     win_smooth,
+#     apply_patch=True,
+#     drizzle_floor=0.03,
+# ):
+#     """
+#     Conditional quantile rainfall retrieval with patch correction.
+
+#     Returns
+#     -------
+#     rain_final : xr.DataArray
+#         Final rainfall estimate (mm h-1)
+#     rain_mean : xr.DataArray
+#         Posterior-mean rainfall (diagnostic only)
+#     """
+
+#     # --------------------------------------------------
+#     # 1. Gather features
+#     # --------------------------------------------------
+#     b1 = BT_IR108.sel(time=time_val).where(mask_cloud.sel(time=time_val))
+#     b2 = BT_IR120.sel(time=time_val).where(mask_cloud.sel(time=time_val))
+#     b3 = BT_WV062.sel(time=time_val).where(mask_cloud.sel(time=time_val))
+#     bd = BT_diff .sel(time=time_val).where(mask_cloud.sel(time=time_val))
+
+#     valid = np.isfinite(b1) & np.isfinite(b2) & np.isfinite(b3) & np.isfinite(bd)
+
+#     if valid.sum().item() == 0:
+#         out = xr.zeros_like(b1).fillna(0.0)
+#         out.attrs["units"] = "mm h-1"
+#         return out, out
+
+#     # --------------------------------------------------
+#     # 2. Dense quantile prediction
+#     # --------------------------------------------------
+#     X = np.column_stack([
+#         b1.values[valid],
+#         b2.values[valid],
+#         b3.values[valid],
+#         bd.values[valid],
+#     ]).astype("float32")
+
+#     dX = xgb.DMatrix(X, feature_names=feat_names, nthread=18)
+
+#     Yq = np.column_stack([
+#         invf(boosters_by_q[q].predict(dX)) for q in qs_dense
+#     ]).astype("float32")
+
+#     Yq = np.maximum.accumulate(Yq, axis=1)
+
+#     # --------------------------------------------------
+#     # 3. Posterior mean (first guess)
+#     # --------------------------------------------------
+#     from quantnn.quantiles import posterior_mean
+#     r_mean_flat = posterior_mean(Yq, quantiles=qs_dense).astype("float32")
+
+#     rain_mean = xr.full_like(b1, 0.0, dtype="float32")
+#     rain_mean.values[valid] = np.clip(r_mean_flat, 0.0, None)
+#     rain_mean.attrs["units"] = "mm h-1"
+
+#     # --------------------------------------------------
+#     # 4. Patch correction (AREA CONTROL)
+#     # --------------------------------------------------
+#     rain_patch = rain_mean.copy()
+
+#     if apply_patch:
+#         lat_grid = b1["y"].broadcast_like(b1)
+#         kstd_grid = kstd_by_lat_xr(lat_grid)
+
+#         meta = xarray_meta_from_da(b1)
+
+#         # IMPORTANT: wet mask from PATCH, not from conditional output
+#         wet_grid = (rain_patch.values > 0).astype(np.int16)
+
+#         corr_wet = correct_wet_mask(
+#             wet_grid,
+#             b1.values.astype("float32"),
+#             meta,
+#             use_std=True,
+#             lat_grid=kstd_grid,
+#         )
+
+#         rain_patch = rain_patch.where(corr_wet == 1, 0.0)
+
+#     # --------------------------------------------------
+#     # 5. Conditional quantile intensity (PIXEL-LOCAL)
+#     # --------------------------------------------------
+#     r_regime = low_or_q70_quantile_reducer(
+#         Yq=Yq,
+#         qs=qs_dense,
+#         q_thresh=0.30,
+#         q_high=0.70,
+#     )
+
+#     # --------------------------------------------------
+#     # 6. APPLY PATCH MASK (THIS WAS MISSING)
+#     # --------------------------------------------------
+#     if apply_patch:
+#         patch_mask_flat = rain_patch.values[valid] > 0
+#         r_regime = np.where(patch_mask_flat, r_regime, 0.0)
+
+#     # --------------------------------------------------
+#     # 7. Final map
+#     # --------------------------------------------------
+#     rain_final = xr.full_like(b1, 0.0, dtype="float32")
+#     rain_final.values[valid] = np.clip(r_regime, 0.0, None)
+#     rain_final.attrs["units"] = "mm h-1"
+
+#     # drizzle + smoothing
+#     if drizzle_floor is not None:
+#         rain_final.values[rain_final.values < drizzle_floor] = 0.0
+
+#     if (win_smooth[0] == "Yes") and (win_smooth > 1):
+#         rain_final = smooth_da_mean(rain_final, win=win_smooth)
+
+#     return rain_final, rain_mean
+#-------------------------
 def predict_slice_regime_conditional_meanq(
     time_val,
-    BT_IR108, 
-    BT_IR120, 
-    BT_WV062, 
+    BT_IR108,
+    BT_IR120,
+    BT_WV062,
     BT_diff,
     mask_cloud,
     win_smooth,
     apply_patch=True,
-    drizzle_floor=0.05,
+    drizzle_floor=0.03,
 ):
     """
-    Regime-aware conditional quantile rainfall retrieval for a single time slice.
+    Conditional quantile rainfall retrieval with PATCH-CONTROLLED OCCURRENCE
+    and UNPATCHED INTENSITY logic.
 
     Returns
     -------
     rain_final : xr.DataArray
-        Final rainfall estimate (mm h-1) – USE THIS
+        Final rainfall estimate (mm h-1)  <-- USE THIS
     rain_mean : xr.DataArray
         Posterior-mean rainfall (diagnostic only)
     """
@@ -525,12 +788,11 @@ def predict_slice_regime_conditional_meanq(
 
     if valid.sum().item() == 0:
         out = xr.zeros_like(b1).fillna(0.0)
-        out.name = "R_pred_mm_per_h"
         out.attrs["units"] = "mm h-1"
         return out, out
 
     # --------------------------------------------------
-    # 2. XGBoost dense quantile prediction
+    # 2. Dense quantile prediction
     # --------------------------------------------------
     X = np.column_stack([
         b1.values[valid],
@@ -541,35 +803,36 @@ def predict_slice_regime_conditional_meanq(
 
     dX = xgb.DMatrix(X, feature_names=feat_names, nthread=18)
 
-    pred_list = [
+    Yq = np.column_stack([
         invf(boosters_by_q[q].predict(dX)) for q in qs_dense
-    ]
+    ]).astype("float32")
 
-    Yq = np.column_stack(pred_list).astype("float32")
-    Yq = np.maximum.accumulate(Yq, axis=1)  # enforce non-crossing
+    # enforce monotonicity
+    Yq = np.maximum.accumulate(Yq, axis=1)
 
     # --------------------------------------------------
-    # 3. First guess: posterior mean
+    # 3. Posterior mean (FIRST GUESS — UNPATCHED)
     # --------------------------------------------------
     from quantnn.quantiles import posterior_mean
     r_mean_flat = posterior_mean(Yq, quantiles=qs_dense).astype("float32")
 
     rain_mean = xr.full_like(b1, 0.0, dtype="float32")
     rain_mean.values[valid] = np.clip(r_mean_flat, 0.0, None)
-    rain_mean.name = "R_mean_mm_per_h"
     rain_mean.attrs["units"] = "mm h-1"
 
     # --------------------------------------------------
-    # 4. Patch correction (AREA control)
+    # 4. Patch correction (OCCURRENCE ONLY)
     # --------------------------------------------------
-    rain_patch = rain_mean.copy()
+    corr_wet = None
 
     if apply_patch:
         lat_grid = b1["y"].broadcast_like(b1)
         kstd_grid = kstd_by_lat_xr(lat_grid)
 
         meta = xarray_meta_from_da(b1)
-        wet_grid = (rain_patch.values > 0).astype(np.int16)
+
+        # IMPORTANT: patch mask derived ONLY from rain_mean
+        wet_grid = (rain_mean.values > 0).astype(np.int16)
 
         corr_wet = correct_wet_mask(
             wet_grid,
@@ -579,42 +842,40 @@ def predict_slice_regime_conditional_meanq(
             lat_grid=kstd_grid,
         )
 
-        rain_patch = rain_patch.where(corr_wet == 1, 0.0)
-
     # --------------------------------------------------
-    # 5. Regime-aware conditional quantile aggregation
+    # 5. CONDITIONAL QUANTILE INTENSITY (UNPATCHED LOGIC)
     # --------------------------------------------------
-    scene_vals = rain_patch.values[valid]
-
-    r_regime = regime_aware_quantile_mean(
+    # NOTE: NO patch influence here — intensity only
+    r_regime = low_or_q70_quantile_reducer(
         Yq=Yq,
         qs=qs_dense,
-        scene_values=scene_vals,
-        q_low=0.30,
-        q_high=0.70,
+        q_thresh=0.30,   # below this → mean(0–0.3)
+        q_high=0.70,     # above → q70
     )
 
+    # --------------------------------------------------
+    # 6. APPLY PATCH MASK (FINAL GATE ONLY)
+    # --------------------------------------------------
+    if apply_patch:
+        patch_mask_flat = corr_wet[valid] == 1
+        r_regime = np.where(patch_mask_flat, r_regime, 0.0)
+
+    # --------------------------------------------------
+    # 7. Final map
+    # --------------------------------------------------
     rain_final = xr.full_like(b1, 0.0, dtype="float32")
     rain_final.values[valid] = np.clip(r_regime, 0.0, None)
-    rain_final.name = "R_pred_mm_per_h"
     rain_final.attrs["units"] = "mm h-1"
 
-    # --------------------------------------------------
-    # 6. Drizzle floor + smoothing
-    # --------------------------------------------------
+    # drizzle floor
     if drizzle_floor is not None:
-        rain_final.values = np.where(
-            rain_final.values < drizzle_floor,
-            0.0,
-            rain_final.values
-        )
+        rain_final.values[rain_final.values < drizzle_floor] = 0.0
 
-    if (win_smooth[0] == "Yes") and (win_smooth > 1):
-        rain_final = smooth_da_mean(rain_final, win=win_smooth)
+    # smoothing
+    if (win_smooth[0] == "Yes") and (win_smooth[1] > 1):
+        rain_final = smooth_da_mean(rain_final, win=win_smooth[1])
 
     return rain_final, rain_mean
-#-------------------------
-
 # -------------------------
 # OPEN + REPROJECT + CLIP + INTERP (per day)
 # -------------------------
@@ -729,7 +990,7 @@ def predict_day_15min(msg_bt_ll, msg_clm_ll, *,
 
     preds = []
     for t in times_day:
-        p_corr, _ = predict_slice_meanq(
+        p_corr, _ = predict_slice_regime_conditional_meanq(
         t,
         BT_IR108=BT_IR108,
         BT_IR120=BT_IR120,
@@ -867,7 +1128,7 @@ for day in days:
     R15 = predict_day_15min(msg_bt_ll, msg_clm_ll,
                             win_smooth=('No', 3), 
                             apply_patch=True, 
-                            drizzle_floor=0.05, 
+                            drizzle_floor=0.03, 
                             )
 
     Rd = daily_total_from_15min(R15)
@@ -903,7 +1164,7 @@ def add_geo(ax):
 
 da = Rd  # your DataArray (y=lat, x=lon)
 da = da.sortby("y")  # safety: ensures south->north increasing
-daily_bins = np.arange(0,50,5)
+daily_bins = np.arange(0,60,5)
 # [
 #     0,   1,   2,   5,   10,
 #     20,  30,  40
@@ -995,3 +1256,14 @@ cb = plt.colorbar(
 cb.set_label("mm day$^{-1}$")
 
 plt.show()
+
+
+#%%
+f,xx = plt.subplots()
+xx.plot(Rd.mean(dim='x').values,Rd.mean(dim='x')['y'].values,label='CML-SAT')
+xx.plot(imerg_daily_xarr[2].mean(dim='lon').values,imerg_daily_xarr[2].mean(dim='lon')['lat'].values,label='IMERG')
+xx.plot(era5_daily_data[2].mean(dim='longitude').values,era5_daily_data[2].mean(dim='longitude')['latitude'].values,label='ERA5')
+xx.set_title(f"Daily total predicted rainfall\n{str(pd.to_datetime(R15['time'].values[0]).normalize())}")
+xx.set_xlabel("mm day$^{-1}$")
+xx.set_ylabel("Latitude")
+xx.legend()
