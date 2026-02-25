@@ -518,66 +518,120 @@ def build_15min_timeseries(df_clean: pd.DataFrame) -> pd.DataFrame:
 # -------------------------------------------------------------------
 def rainlink_strict_Aobs(
     ts_15: pd.DataFrame,
-    wet_thr_db: float = 0.5,
+    wet_thr_db: float = 3.0,
     win: str = "24H",
-    q: float = 0.9,
+    q: float = 0.99,
     min_past_bins: int = 8,
     ffill_limit_bins: int = 32,
     two_pass: bool = True,
-    require_src_present: bool = True
+    require_src_present: bool = True,
+    # NEW: guard to avoid bad pass-2 baselines
+    use_drycount_guard: bool = True,
+    min_dry_bins: int = 8,             # min dry samples required within `win` to accept base2
+    dry_mask_source: str = "wet1",     # "wet1" (from pass-1) or "wet_final" (from final Aobs)
+    guard_behavior: str = "fallback",  # "fallback" -> use base1, "zero" -> force Aobs=0 when unreliable
 ) -> pd.DataFrame:
     """
     Compute:
       baseline_rsl (past-only q90),
-      A_obs_dB = max(0, baseline - RSL),
+      A_obs_dB = max(0, baseline - sig_db),
       wet_rl   = A_obs_dB > wet_thr_db
 
-    two_pass=True (recommended):
-      pass-1 wet mask from A1
-      pass-2 baseline recomputed using ONLY dry samples (wet masked out)
-      final baseline = pass2 where available, else pass1
-
-    require_src_present:
-      if True and ts_15 has 'src_present', baseline uses only src_present==True samples.
-      This avoids baseline getting influenced by reindexed filler rows.
+    NEW (optional) dry-count guard:
+      - recompute baseline using dry-only samples (pass-2),
+      - BUT only trust base2 where we have enough dry samples within the rolling window.
+      - Else either fall back to base1 or set Aobs=0 (user-controlled).
     """
+    if guard_behavior not in ("fallback", "zero"):
+        raise ValueError("guard_behavior must be 'fallback' or 'zero'")
+    if dry_mask_source not in ("wet1", "wet_final"):
+        raise ValueError("dry_mask_source must be 'wet1' or 'wet_final'")
+
     out = []
+    win_td = pd.Timedelta(win)
+
     for lid, g in ts_15.groupby("link_id", sort=False):
         g = g.sort_values("time").copy()
         idx = pd.DatetimeIndex(pd.to_datetime(g["time"], utc=True))
 
-        rsl = pd.Series(g["sig_db"].astype(float).values, index=idx)
+        sig = pd.Series(pd.to_numeric(g["sig_db"], errors="coerce").astype(float).values, index=idx)
 
-        # optionally mask non-source rows
+        # optionally mask non-source rows (avoid regularized filler influencing baseline)
         if require_src_present and ("src_present" in g.columns):
             src_mask = g["src_present"].astype(bool).values
-            rsl_src = rsl.mask(~src_mask)
+            sig_src = sig.mask(~src_mask)
         else:
-            rsl_src = rsl
+            sig_src = sig
 
-        # pass 1
+        # -------------------
+        # pass 1 (all src samples)
+        # -------------------
         base1 = _baseline_q90_past_only(
-            rsl_src, win=win, q=q,
+            sig_src, win=win, q=q,
             min_past_bins=min_past_bins,
             ffill_limit_bins=ffill_limit_bins
         )
-        A1 = np.maximum(0.0, base1.values - rsl.values)
+        A1 = np.maximum(0.0, base1.values - sig.values)
         wet1 = (A1 > wet_thr_db) & np.isfinite(A1)
 
+        # default: pass-1 outputs
+        base = base1.copy()
+
+        # -------------------
+        # pass 2 (dry-only recompute)
+        # -------------------
         if two_pass:
-            # recompute baseline using dry-only samples
-            rsl_dry = rsl_src.mask(wet1)
+            # choose which wet mask defines "dry"
+            wet_mask_for_dry = wet1
+
+            # dry-only series used for pass-2 baseline
+            sig_dry = sig_src.mask(wet_mask_for_dry)
+
             base2 = _baseline_q90_past_only(
-                rsl_dry, win=win, q=q,
+                sig_dry, win=win, q=q,
                 min_past_bins=min_past_bins,
                 ffill_limit_bins=ffill_limit_bins
             )
-            base = base2.fillna(base1)
-        else:
-            base = base1
 
-        Aobs = np.maximum(0.0, base.values - rsl.values)
+            if use_drycount_guard:
+                # rolling dry sample count over the SAME window
+                # (count finite samples in sig_dry)
+                dry_count = sig_dry.notna().rolling(window=win_td, closed="left").sum()
+
+                # accept base2 only where enough dry samples exist
+                ok2 = (dry_count.values >= float(min_dry_bins))
+
+                # where base2 isn't OK, either fallback to base1 or mark as unreliable
+                if guard_behavior == "fallback":
+                    base = base1.copy()
+                    base.values[ok2] = base2.values[ok2]
+                else:  # guard_behavior == "zero"
+                    # still use base2 where ok2, else we'll zero out Aobs later
+                    base = base1.copy()
+                    base.values[ok2] = base2.values[ok2]
+
+                # store diagnostics (handy for debugging north links)
+                g["dry_count_win"] = dry_count.values
+                g["base2_ok"] = ok2
+            else:
+                # original behavior: prefer base2 where available, else base1
+                base = base2.fillna(base1)
+
+        # -------------------
+        # final Aobs/wet
+        # -------------------
+        Aobs = np.maximum(0.0, base.values - sig.values)
         wet = (Aobs > wet_thr_db) & np.isfinite(Aobs)
+
+        # If user requested guard based on final wet (rarely needed), you can rerun mask:
+        # (kept simple: use wet1 by default; "wet_final" option would require a second recompute.)
+
+        if two_pass and use_drycount_guard and guard_behavior == "zero":
+            # wherever pass-2 is unreliable, force Aobs=0 and wet=False
+            # (only applies if we actually created base2_ok)
+            bad2 = ~g.get("base2_ok", pd.Series(True, index=g.index)).to_numpy(bool)
+            Aobs = np.where(bad2, 0.0, Aobs)
+            wet  = np.where(bad2, False, wet)
 
         g["baseline_rsl"] = base.values
         g["A_obs_dB"] = Aobs
@@ -586,7 +640,6 @@ def rainlink_strict_Aobs(
         out.append(g)
 
     return pd.concat(out, ignore_index=True)
-
 
 # -------------------------------------------------------------------
 # 3) WA + k–α -> R, with HARD wet gate (dry == 0)
@@ -1104,7 +1157,7 @@ def grid_rain_15min_rainlink_ok(
     min_pts_ok=12,                            # need at least this many (wet+dry0) to run OK
     support_k=2, support_radius_km=25.0,     # mask requires ≥k wet links within radius
     drizzle_to_zero=0.10,                     # floor tiny positives to 0.0 (doesn't touch NaNs)
-    times_sel=None,
+    times_sel=None,    
     # NEW:
     n_jobs: int = 1,
     parallel_backend_name: str = "processes",
@@ -1168,7 +1221,7 @@ def grid_rain_15min_rainlink_ok(
         # training set = wet values + dry zeros
         lon_tr = np.concatenate([lon[wet], lon[dry]])
         lat_tr = np.concatenate([lat[wet], lat[dry]])
-        val_tr = np.concatenate([vals[wet], np.zeros(np.count_nonzero(dry), float)])
+        val_tr = np.concatenate([vals[wet], np.zeros(np.count_nonzero(dry), float)])        
 
         if len(val_tr) < max(3, int(min_pts_ok)):
             Z = np.full_like(LON, insufficient_training_fill, float)
@@ -1444,3 +1497,465 @@ def save_each_time_to_netcdf(
         out_paths.append(fn)
 
     return out_paths
+
+import os
+import numpy as np
+import pandas as pd
+import xarray as xr
+from datetime import datetime, timezone
+
+def save_daily_grid_and_points_netcdf(
+    R_da_day: xr.DataArray,          # (time, lat, lon) for one day
+    df_s5_day: pd.DataFrame,         # time-indexed; cols: ID, R_mm_per_h
+    meta_xy: pd.DataFrame,           # cols: ID, XStart, YStart, XEnd, YEnd
+    out_dir: str,
+    day: pd.Timestamp | str,         # e.g. "2025-06-19"
+    base_name: str = "ghana_cml_R",
+    *,
+    var_grid: str = "R_mm_per_h",
+    var_point: str = "R_point_mm_per_h",
+    engine: str = "netcdf4",
+    complevel: int = 5,
+    dtype: str = "float32",
+    fill_value: float = -9999.0,
+    chunks_time: int = 1,
+    chunks_lat: int = 256,
+    chunks_lon: int = 256,
+    chunks_link: int = 2048,
+
+    # ---------------------------
+    # NEW: metadata knobs
+    # ---------------------------
+    version: str = "V1",
+    title: str | None = None,
+    summary: str | None = None,
+    producer_name: str = "Trans-African Hydro-Meteorological Observatory (TAHMO)",
+    institution: str = "TAHMO",
+    creator_name: str  = "Kingsley Kumah",          # e.g., "Kingsley Kumah"
+    creator_email: str | None = None,
+    project: str = "PRIME Ghana CML rainfall retrieval",
+    source: str = "Commercial Microwave Links (CML); RainLINK-like processing; Ordinary Kriging gridding",
+    references: str | None = None,            # DOI / repo URL / paper
+    comment: str | None = None,
+    conventions: str = "CF-1.8",
+):
+    os.makedirs(out_dir, exist_ok=True)
+    day_date = pd.Timestamp(day).date()
+
+    # --- ensure day consistency ---
+    # Grid times
+    t_grid = pd.to_datetime(R_da_day["time"].values)
+    t_grid = pd.DatetimeIndex(t_grid).tz_localize(None)
+
+    # Points times from df_s5_day index
+    idx = df_s5_day.index
+    if idx.tz is not None:
+        idx = idx.tz_convert("UTC").tz_localize(None)
+    df_s5_day = df_s5_day.copy()
+    df_s5_day.index = idx
+
+    # Restrict to day (just in case)
+    df_s5_day = df_s5_day[df_s5_day.index.date == day_date]
+
+    # --- build link geometry (midpoints) ---
+    m = meta_xy.drop_duplicates("ID").copy()
+    for c in ["XStart", "YStart", "XEnd", "YEnd"]:
+        m[c] = pd.to_numeric(m[c], errors="coerce")
+    m = m.dropna(subset=["XStart", "YStart", "XEnd", "YEnd"])
+
+    m["lon_mid"] = 0.5 * (m["XStart"] + m["XEnd"])
+    m["lat_mid"] = 0.5 * (m["YStart"] + m["YEnd"])
+
+    link_ids = m["ID"].astype(str).values
+    n_link = len(link_ids)
+
+    # --- align points to (time, link) matrix ---
+    times = t_grid  # master axis to match grid exactly
+    Rpt = np.full((len(times), n_link), np.nan, dtype=np.float32)
+    id2j = {lid: j for j, lid in enumerate(link_ids)}
+
+    for i, tt in enumerate(times):
+        g = df_s5_day.loc[df_s5_day.index == tt]
+        if g is None or len(g) == 0:
+            continue
+        if isinstance(g, pd.Series):
+            g = g.to_frame().T
+        for _, row in g.iterrows():
+            lid = str(row["ID"])
+            j = id2j.get(lid, None)
+            if j is None:
+                continue
+            val = pd.to_numeric(row["R_mm_per_h"], errors="coerce")
+            if np.isfinite(val):
+                Rpt[i, j] = float(val)
+
+    # --- build dataset ---
+    grid = R_da_day.astype(dtype).rename(var_grid)
+
+    ds = xr.Dataset(
+        data_vars={
+            var_grid: grid,
+            var_point: (("time", "link"), Rpt),
+            "link_lon": (("link",), m["lon_mid"].to_numpy(float)),
+            "link_lat": (("link",), m["lat_mid"].to_numpy(float)),
+            "link_id":  (("link",), link_ids),
+        },
+        coords={
+            "time": times.values.astype("datetime64[ns]"),
+            "lat": grid["lat"].values,
+            "lon": grid["lon"].values,
+            "link": np.arange(n_link, dtype=int),
+        }
+    )
+
+    # ---------------------------
+    # NEW: variable-level attrs
+    # ---------------------------
+    ds[var_grid].attrs.update({
+        "long_name": "Gridded rainfall rate from CML",
+        "units": "mm h-1",
+        "description": (
+            "Spatially continuous rainfall field on a regular lat/lon grid. "
+            "Derived from link-level CML rainfall estimates mapped via RainLINK-like OK with strict wet support."
+        ),
+    })
+    ds[var_point].attrs.update({
+        "long_name": "Link midpoint rainfall rate",
+        "units": "mm h-1",
+        "description": (
+            "Rainfall rate estimated per CML link and assigned to the link midpoint. "
+            "Array is aligned to the grid time axis; missing link/time pairs are fill_value."
+        ),
+    })
+    ds["link_lon"].attrs.update({"long_name": "Link midpoint longitude", "units": "degrees_east"})
+    ds["link_lat"].attrs.update({"long_name": "Link midpoint latitude", "units": "degrees_north"})
+    ds["link_id"].attrs.update({"long_name": "CML link identifier"})
+
+    ds["lat"].attrs.update({"standard_name": "latitude", "units": "degrees_north"})
+    ds["lon"].attrs.update({"standard_name": "longitude", "units": "degrees_east"})
+    ds["time"].attrs.update({"standard_name": "time"})
+
+    # ---------------------------
+    # NEW: global attrs (file metadata)
+    # ---------------------------
+    created = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    day_str_iso = pd.Timestamp(day_date).strftime("%Y-%m-%d")
+
+    if title is None:
+        title = f"Ghana CML rainfall (gridded + link midpoints) — {day_str_iso}"
+    if summary is None:
+        summary = (
+            "Daily NetCDF containing (1) 15-min gridded rainfall maps over Ghana and "
+            "(2) corresponding 15-min link-level rainfall rates assigned to link midpoints."
+        )
+
+    ds.attrs.update({
+        "Conventions": conventions,
+        "title": title,
+        "summary": summary,
+        "product_version": version,
+        "institution": institution,
+        "producer_name": producer_name,
+        "project": project,
+        "source": source,
+        "history": f"{created}: created daily grid+points NetCDF",
+        "date_created": created,
+        "time_coverage_start": str(times.min()),
+        "time_coverage_end": str(times.max()),
+        "geospatial_lat_min": float(np.nanmin(ds["lat"].values)),
+        "geospatial_lat_max": float(np.nanmax(ds["lat"].values)),
+        "geospatial_lon_min": float(np.nanmin(ds["lon"].values)),
+        "geospatial_lon_max": float(np.nanmax(ds["lon"].values)),
+    })
+
+    # optional creator/contact fields
+    if creator_name is not None:
+        ds.attrs["creator_name"] = creator_name
+    if creator_email is not None:
+        ds.attrs["creator_email"] = creator_email
+    if references is not None:
+        ds.attrs["references"] = references
+    if comment is not None:
+        ds.attrs["comment"] = comment
+
+    # --- encoding / chunking ---
+    enc = {
+        var_grid: {
+            "zlib": True, "complevel": int(complevel), "shuffle": True,
+            "dtype": dtype, "_FillValue": fill_value,
+            "chunksizes": (
+                min(chunks_time, len(times)),
+                min(chunks_lat, ds.sizes["lat"]),
+                min(chunks_lon, ds.sizes["lon"]),
+            ),
+        },
+        var_point: {
+            "zlib": True, "complevel": int(complevel), "shuffle": True,
+            "dtype": dtype, "_FillValue": fill_value,
+            "chunksizes": (min(chunks_time, len(times)), min(chunks_link, n_link)),
+        },
+        "lat": {"zlib": False},
+        "lon": {"zlib": False},
+        "time": {"zlib": False},
+        "link": {"zlib": False},
+        "link_lon": {"zlib": False},
+        "link_lat": {"zlib": False},
+        "link_id": {"zlib": False},
+    }
+
+    day_str = pd.Timestamp(day_date).strftime("%Y%m%d")
+    fn = os.path.join(out_dir, f"{base_name}_{day_str}.nc")
+
+    ds.to_netcdf(fn, engine=engine, encoding=enc, unlimited_dims={"time"})
+    return fn
+#%% Some helper functions for coupling link data to metadata
+from datetime import datetime, timedelta
+
+# Function to extract datetime from filename
+def extract_datetime_from_filename(fname):
+    # Example: Schedule_pfm_SDH_20250812004105281472818770368_1
+    parts = fname.split("_")
+    if len(parts) < 4:
+        return None  # unexpected filename
+    
+    timestamp = parts[3]  # "20250812004105281472818770368"
+    try:
+        # Take first 10 chars: YYYYMMDDHH
+        dt = datetime.strptime(timestamp[:10], "%Y%m%d%H")
+        return dt
+    except ValueError:
+        return None
+
+cde_run_dte = datetime.today().strftime('%Y%m%d')
+
+def extract_polarization(x):
+    if "MODU-" in x:
+        modu_part = x.split("MODU-")[1]  
+        modu_number = modu_part[0]      
+        return {'1': 'V', '2': 'H'}.get(modu_number, None)
+    return None
+
+def get_event_value_or_return_nan(group, event_name):
+    """Get the value from the correct column based on the event name."""
+    row = group[group['EventName'] == event_name]
+    return row['Value'].values[0] if not row.empty else np.nan
+
+
+def cml2metadata_coupling_framework(cml, metadat):
+    """
+    Function to couple signal level data (CML) with metadata and return the processed data in RAINLINK format.
+
+    Parameters:
+    cml (str): Path to the signal level data file.
+    metadat (pd.DataFrame): Metadata dataframe.
+
+    Returns:
+    pd.DataFrame: Coupled data in RAINLINK format.
+    """
+    # print(f'Processing CML file: {os.path.basename(cml)}')
+    cml_dat_df = pd.read_csv(cml, header=0, sep='\t')  # assumes headers are present and identical
+
+    # Construct an ID to distinguish between sublinks, antennas, and polarizations across a single path
+    cml_dat_df['Monitored_ID'] = (cml_dat_df['NEName'].astype(str) + '-' +
+                                  cml_dat_df['BrdID'].astype(str) + '-' +
+                                  cml_dat_df['BrdName'].astype(str) + '-' +
+                                  cml_dat_df['PortNO'].astype(str) + '(' +
+                                  cml_dat_df['PortName'].astype(str) + ')-' +
+                                  cml_dat_df['PathID'].astype(str))
+
+    # Add polarization column
+    cml_dat_df['Polarization'] = cml_dat_df['Monitored_ID'].apply(extract_polarization)
+
+    # Merge CML data with metadata
+    cml_data = pd.merge(cml_dat_df, metadat, on=['Monitored_ID'], how='inner')
+
+    # Check if the merge resulted in an empty dataframe
+    if cml_data.empty:
+        error_message = f"No common 'Monitored_ID' found for file: {os.path.basename(cml)}"
+        print(error_message)
+        log_path = f"/home/kkumah/Projects/cml-stuff/data-cml/metadata/unmatched_cml_files_{cde_run_dte}.txt"
+        with open(log_path, "a") as f:
+            f.write(error_message + "\n")
+        return None  # Return None to indicate skipping further processing
+
+    # Handle unmatched polarizations
+    cml_data['Polarization'] = np.where((cml_data['Polarization_x'] != cml_data['Polarization_y']) &
+                                        ~(cml_data['Polarization_x'].isin(['H', 'V'])),
+                                        cml_data['Polarization_y'],
+                                        cml_data['Polarization_x'])
+
+    # Drop unnecessary columns
+    cml_data = cml_data.drop(columns=['ONEID', 'ONEName', 'NEID', 'NEType',
+                                      'NEName', 'BrdID', 'BrdName', 'PortNO', 'PortName', 'PathID',
+                                      'ShelfID', 'BrdType', 'PortID', 'MOType',
+                                      'FBName', 'EventID', 'PMParameterName', 'PMLocationID',
+                                      'PMLocation', 'UpLevel', 'DownLevel', 'ResultOfLevel',
+                                      'Unnamed: 27', 'Polarization_x', 'Temp_ID', 'Polarization_y',
+                                      'ATPC'])
+
+    # Columns to group by
+    group_columns = ['Monitored_ID', 'Far_end_ID', 'Polarization', 'Period', 'EndTime']
+
+    # Process TSL data
+    df_tsl = cml_data.copy()
+    flattened_tsl_rows = []
+    for group_keys, group_data in df_tsl.groupby(group_columns):
+        row = dict(zip(group_columns, group_keys))
+        for event in ['TSL_MIN', 'TSL_MAX', 'TSL_CUR', 'TSL_AVG']:
+            row[event] = get_event_value_or_return_nan(group_data, event)
+        flattened_tsl_rows.append(row)
+    tsl_flattened = pd.DataFrame(flattened_tsl_rows)
+
+    # Process RSL data
+    df_rsl = cml_data.copy()
+    df_rsl = df_rsl.rename(columns={'Monitored_ID': 'Far_end_ID', 'Far_end_ID': 'Monitored_ID'})
+    flattened_rsl_rows = []
+    for group_keys, group_data in df_rsl.groupby(group_columns):
+        row = dict(zip(group_columns, group_keys))
+        for event in ['RSL_MIN', 'RSL_MAX', 'RSL_CUR', 'RSL_AVG']:
+            row[event] = get_event_value_or_return_nan(group_data, event)
+        flattened_rsl_rows.append(row)
+    rsl_flattened = pd.DataFrame(flattened_rsl_rows)
+
+    # Merge TSL and RSL dataframes
+    if tsl_flattened.empty or rsl_flattened.empty:
+        error_message = f"Skipping file {os.path.basename(cml)} due to insufficient data after processing."
+        print(error_message)
+        log_path = f"/home/kkumah/Projects/cml-stuff/data-cml/metadata/insufficient_data_{cde_run_dte}.txt"
+        with open(log_path, "a") as f:
+            f.write(error_message + "\n")
+        return None  # Skip further processing if any intermediate result is empty
+
+    cml_data_flattened = pd.merge(tsl_flattened, rsl_flattened, on=group_columns)
+
+    # Add metadata columns back
+    metadata_cols = ['Frequency', 'XStart', 'YStart', 'XEnd', 'YEnd', 'PathLength']
+    cml_data_unique_metadata = cml_data[group_columns + metadata_cols].drop_duplicates()
+    cml_data_flattened = pd.merge(cml_data_flattened, cml_data_unique_metadata, how='left', on=group_columns)
+
+    # Filter and process data
+    linkdata = cml_data_flattened.copy()
+    linkdata = linkdata.dropna(subset=['TSL_MIN', 'TSL_MAX', 'TSL_AVG', 'TSL_CUR'])
+    try:
+        linkdata['RSL_MIN'] = pd.to_numeric(linkdata['RSL_MIN'], errors='coerce')
+        linkdata['TSL_AVG'] = pd.to_numeric(linkdata['TSL_AVG'], errors='coerce')
+        linkdata['RSL_MAX'] = pd.to_numeric(linkdata['RSL_MAX'], errors='coerce')
+        
+        linkdata['Pmin'] = linkdata['RSL_MIN'] - linkdata['TSL_AVG']
+        linkdata['Pmax'] = linkdata['RSL_MAX'] - linkdata['TSL_AVG']
+    except Exception as e:
+        error_message = f"Error processing Pmin/Pmax of file {os.path.basename(cml)}: {e}"
+        print(error_message)
+        log_path = f"/home/kkumah/Projects/cml-stuff/data-cml/metadata/error_log_{cde_run_dte}.txt"
+        with open(log_path, "a") as f:
+            f.write(error_message + "\n")
+        return None
+    linkdata['ID'] = linkdata['Monitored_ID'] + '>>' + linkdata['Far_end_ID']
+    linkdata = linkdata.drop(columns=['Monitored_ID', 'Far_end_ID', 'Period'])
+    linkdata = linkdata.rename(columns={'EndTime': 'DateTime'})
+    linkdata['Frequency'] = linkdata['Frequency'] / 1000  # convert to GHz
+    linkdata['DateTime'] = pd.to_datetime(linkdata['DateTime'], utc=True).dt.strftime('%Y%m%d%H%M')
+
+    # Reorder columns
+    order_columns = ['Frequency', 'DateTime', 'Pmin', 'Pmax', 'XStart', 'YStart', 'XEnd', 'YEnd', 'ID',
+                     'Polarization', 'PathLength', 'TSL_AVG']
+    linkdata = linkdata[order_columns]
+
+    return linkdata
+
+#%% Some plotting
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import matplotlib.colors as mcolors
+
+def plot_grid_with_wetdry_midpoints_discrete_linear(
+    R2d,                 # xr.DataArray (lat, lon)
+    df_s5,               # time-indexed; cols: ID, R_mm_per_h
+    meta_xy,             # cols: ID, XStart, YStart, XEnd, YEnd
+    t,                   # timestamp string or pd.Timestamp (naive UTC)
+    wet_thr_mmph=0.1,
+    extent=None,
+    title=None,
+    bounds=None,         # if None -> auto linear bins
+    n_bins=12,           # used only when bounds is None
+    vmin=0.0,
+    vmax=None,           # if None -> robust max from data
+    robust_q=0.995,
+    cmap="turbo",
+    extend="max",
+):
+    t = pd.Timestamp(t)
+
+    # --- link rain at time ---
+    pts = df_s5.loc[t].copy()
+    if isinstance(pts, pd.Series):
+        pts = pts.to_frame().T
+    pts = pts.merge(meta_xy, on="ID", how="inner")
+
+    # midpoints
+    pts["lon_mid"] = (pd.to_numeric(pts["XStart"], errors="coerce") +
+                      pd.to_numeric(pts["XEnd"], errors="coerce")) / 2.0
+    pts["lat_mid"] = (pd.to_numeric(pts["YStart"], errors="coerce") +
+                      pd.to_numeric(pts["YEnd"], errors="coerce")) / 2.0
+
+    r_link = pd.to_numeric(pts["R_mm_per_h"], errors="coerce").fillna(0.0).to_numpy()
+    wet = r_link > float(wet_thr_mmph)
+
+    # --- data ---
+    Z = np.asarray(R2d.values, float)
+    finite = np.isfinite(Z)
+
+    # --- linear discrete bounds ---
+    if bounds is None:
+        if vmax is None:
+            vmax = float(np.nanquantile(Z[finite], robust_q)) if finite.any() else 1.0
+        vmax = max(float(vmax), float(vmin) + 1e-6)
+        bounds = np.linspace(float(vmin), float(vmax), int(n_bins) + 1)
+
+    bounds = np.asarray(bounds, float)
+    if bounds.ndim != 1 or bounds.size < 2 or not np.all(np.diff(bounds) > 0):
+        raise ValueError("bounds must be a strictly increasing 1D list/array with >= 2 edges.")
+
+    norm = mcolors.BoundaryNorm(bounds, ncolors=plt.get_cmap(cmap).N, clip=False)
+
+    fig, ax = plt.subplots(figsize=(7, 6))
+    im = ax.pcolormesh(
+        R2d["lon"], R2d["lat"], Z,
+        shading="auto",
+        cmap=cmap,
+        norm=norm
+    )
+
+    # discrete colorbar
+    cbar = plt.colorbar(
+        im, ax=ax,
+        boundaries=bounds,
+        ticks=bounds,
+        spacing="proportional",
+        extend=extend
+    )
+    cbar.set_label(f"{R2d.name or 'R'} [{R2d.attrs.get('units','')}]")
+
+    # overlays
+    ax.scatter(
+        pts.loc[~wet, "lon_mid"], pts.loc[~wet, "lat_mid"],
+        s=10, marker="o", alpha=0.35, label="dry links"
+    )
+    ax.scatter(
+        pts.loc[wet, "lon_mid"], pts.loc[wet, "lat_mid"],
+        s=28, marker="o", edgecolor="k", linewidth=0.2,
+        alpha=0.95, label=f"wet links (R>{wet_thr_mmph})"
+    )
+
+    if extent is not None:
+        ax.set_xlim(extent[0], extent[1])
+        ax.set_ylim(extent[2], extent[3])
+
+    ax.set_xlabel("lon")
+    ax.set_ylabel("lat")
+    ax.set_title(title or f"{t}  |  wet_thr={wet_thr_mmph} mm/h")
+    ax.legend(loc="lower left")
+    ax.grid(alpha=0.2)
+    plt.tight_layout()
+    plt.show()
