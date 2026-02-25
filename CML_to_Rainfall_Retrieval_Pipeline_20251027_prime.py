@@ -50,7 +50,7 @@ importlib.reload(pm)
 ts_15 = pm.build_15min_timeseries(df_clean)
 
 # 2) strict past-only baseline and observed attenuation
-dfA = pm.rainlink_strict_Aobs(ts_15, wet_thr_db=0.5)
+dfA = pm.rainlink_strict_Aobs(ts_15, wet_thr_db=3.0)
 
 # 3) Leijnse WA + ITU(2005) k–α → *allow true zeros*
 df_rate = pm.rainlink_strict_R(dfA, R_min=0.0)
@@ -166,15 +166,15 @@ R_da_rl, diag_rl = s6pcm.grid_rain_15min_rainlink_ok(
     meta_xy_grid,
     grid_res_deg=0.03, 
     domain_pad_deg=0.20,
-    wet_thr=0.8, 
-    dry_thr=0.05,
+    wet_thr=1.0, 
+    dry_thr=0.0,
     ok_model="exponential", 
-    ok_range_km=25.0, 
-    ok_nugget_frac=0.45,
-    min_pts_ok=15, 
-    support_k=3, 
+    ok_range_km=15.0, 
+    ok_nugget_frac=0.5,
+    min_pts_ok=50, 
+    support_k=4, 
     support_radius_km=25.0,
-    drizzle_to_zero=0.15,
+    drizzle_to_zero=0.5,
     n_jobs=20, 
     parallel_backend_name="processes",
 )
@@ -199,10 +199,10 @@ R1, d1 = s6pcm.grid_rain_at_time_rainlink(
     wet_thr=1.0,
     dry_thr=0.0,
     ok_model="exponential",
-    ok_range_km=25.0,
-    ok_nugget_frac=0.45,
-    min_pts_ok=15,
-    support_k=3,
+    ok_range_km=15.0,
+    ok_nugget_frac=0.5,
+    min_pts_ok=50,
+    support_k=6,
     support_radius_km=25.0,
     drizzle_to_zero=0.5,     # you can change from default 0.10 if you like
     n_jobs=20,                 # or >1 if you want parallel
