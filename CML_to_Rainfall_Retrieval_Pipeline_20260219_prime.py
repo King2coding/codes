@@ -10,7 +10,10 @@ out_CML_R_path = r'/home/kkumah/Projects/cml-stuff/new_out_cml_Rain'
 
 matched_metadata = pd.read_csv(os.path.join(metadata_path, 'matched_metadata_kkk_20250527.csv'))
 
-manual_latest_dt = datetime(2025, 6, 19, 23, 59)  # Example: datetime(2025, 8, 29, 12, 0)
+target_date = pd.to_datetime("2025-06-19 23:59:00") # or set to None to use latest available
+dt_args = (int(target_date.year), int(target_date.month), int(target_date.day), int(target_date.hour), int(target_date.minute))
+
+manual_latest_dt = datetime(*dt_args) if target_date else None # Example: datetime(2025, 8, 29, 12, 0)
 
 file_names = os.listdir(raw_cml_path)
 file_datetimes = [(extract_datetime_from_filename(f), f) for f in file_names]
@@ -27,6 +30,7 @@ recent_files = [(dt, f) for dt, f in file_datetimes if cutoff_time <= dt <= late
 recent_files.sort(key=lambda x: x[0])
 
 #%% Block 1 — Coupling raw CML to metadata
+
 coupled_dat = []
 
 for idx, f in enumerate(recent_files):
@@ -94,71 +98,21 @@ R_da_rl, diag_rl = grid_rain_15min_rainlink_ok(
 )
 print(diag_rl)
 
-
-#%%
-t = pd.Timestamp("2025-06-19 16:15:00")
-
-meta_xy = (
-    df_clean.reset_index()[["ID","XStart","YStart","XEnd","YEnd"]]
-    .drop_duplicates("ID")
-)
-
-R1, d1 = grid_rain_at_time_rainlink(
-    df_s5=df_s5[["ID", "R_mm_per_h"]],
-    df_meta_for_xy=meta_xy,
-    t=t,                      # naive UTC timestamp present in df_s5.index
-
-    # RainLINK-OK parameters:
-    grid_res_deg=0.03,
-    domain_pad_deg=0.20,
-    wet_thr=1.0,
-    dry_thr=0.0,
-    ok_model="exponential",
-    ok_range_km=15.0,
-    ok_nugget_frac=0.5,
-    min_pts_ok=50,
-    support_k=4,
-    support_radius_km=40.0,
-    drizzle_to_zero=0.5,     # you can change from default 0.10 if you like
-    n_jobs=15,                 # or >1 if you want parallel
-    parallel_backend_name="processes",
-    outside_support_fill=np.nan,
-    insufficient_training_fill=np.nan,
-    smooth_kernel_px=3,
-    smooth_fill_holes=True,
-)
-
-print(d1)
-R1.plot(cmap='Spectral_r',vmax=15)
-
-# If you already have a 2-D slice:
-R2d = R1  # (lat,lon)
-
-# meta_xy_grid returned by prepare_inputs_for_gridding, OR meta_xy you built
-plot_grid_with_wetdry_midpoints_discrete_linear(
-    R2d[0], df_s5, meta_xy_grid, t,
-    wet_thr_mmph=0.1,
-    extent=(-3.25, 1.2, 4.8, 11.15),
-    n_bins=15,   # 12 linear discrete steps
-    vmin=0.0,
-    vmax=15,  
-    cmap="Spectral_r",
-)
 #%% Block 7 — Saving outputs: Save slices
-from pipeline_modes import save_each_time_to_netcdf
+# from pipeline_modes import save_each_time_to_netcdf
 
-out_paths = save_each_time_to_netcdf(
-    R_da_rl,
-    out_dir=out_CML_R_path,
-    base_name="ghana_cml_R",
-    engine="netcdf4",
-    complevel=5,
-    dtype="float32",
-    fill_value=-9999.0,     # or np.nan if you prefer
-    chunks_lat=256,
-    chunks_lon=256,
-    keep_time_dim=True
-)
+# out_paths = save_each_time_to_netcdf(
+#     R_da_rl,
+#     out_dir=out_CML_R_path,
+#     base_name="ghana_cml_R",
+#     engine="netcdf4",
+#     complevel=5,
+#     dtype="float32",
+#     fill_value=-9999.0,     # or np.nan if you prefer
+#     chunks_lat=256,
+#     chunks_lon=256,
+#     keep_time_dim=True
+# )
 # print(f"Wrote {len(out_paths)} files. First:\n", out_paths[:3])
 
 # 3) write daily file with both products
@@ -172,7 +126,7 @@ out_file = save_daily_grid_and_points_netcdf(
 
     # metadata
     version="V1",
-    creator_name="Kingsley Kumah",
+    creator_name="TAHMO",
     creator_email="kkumahkwabena@gmail.com",
     project="PRIME Ghana CML rainfall retrieval",
     references=None,
@@ -181,143 +135,193 @@ out_file = save_daily_grid_and_points_netcdf(
 
 print("Wrote:", out_file)
 
-# Optional quick sanity check
-ds = xr.open_dataset(out_file)
-print(ds)
-print("Grid var:", ds["R_mm_per_h"].shape, "Point var:", ds["R_point_mm_per_h"].shape)
+# # Optional quick sanity check
+# ds = xr.open_dataset(out_file)
+# print(ds)
+# print("Grid var:", ds["R_mm_per_h"].shape, "Point var:", ds["R_point_mm_per_h"].shape)
 
 #%% Some diagnostics
 # %%
-import matplotlib.pyplot as plt
-m = meta_xy_grid.copy()
-for c in ["XStart","YStart","XEnd","YEnd"]:
-    m[c] = pd.to_numeric(m[c], errors="coerce")
+# import matplotlib.pyplot as plt
+# m = meta_xy_grid.copy()
+# for c in ["XStart","YStart","XEnd","YEnd"]:
+#     m[c] = pd.to_numeric(m[c], errors="coerce")
 
-m["lon_mid"] = 0.5*(m["XStart"] + m["XEnd"])
-m["lat_mid"] = 0.5*(m["YStart"] + m["YEnd"])
+# m["lon_mid"] = 0.5*(m["XStart"] + m["XEnd"])
+# m["lat_mid"] = 0.5*(m["YStart"] + m["YEnd"])
 
-lat_cut = 9.0  # tune
-north_ids = m.loc[m["lat_mid"] >= lat_cut, "ID"].unique()
-print("north links:", len(north_ids))
+# lat_cut = 9.0  # tune
+# north_ids = m.loc[m["lat_mid"] >= lat_cut, "ID"].unique()
+# print("north links:", len(north_ids))
 
-t = pd.Timestamp("2025-06-19 16:15:00")
+# t = pd.Timestamp("2025-06-19 16:15:00")
 
-pts_t = df_s5.loc[t].copy()
-if isinstance(pts_t, pd.Series):
-    pts_t = pts_t.to_frame().T
+# pts_t = df_s5.loc[t].copy()
+# if isinstance(pts_t, pd.Series):
+#     pts_t = pts_t.to_frame().T
 
-pts_t = pts_t[pts_t["ID"].isin(north_ids)].copy()
-pts_t["R_mm_per_h"] = pd.to_numeric(pts_t["R_mm_per_h"], errors="coerce").fillna(0.0)
+# pts_t = pts_t[pts_t["ID"].isin(north_ids)].copy()
+# pts_t["R_mm_per_h"] = pd.to_numeric(pts_t["R_mm_per_h"], errors="coerce").fillna(0.0)
 
-wet_thr_mmph = 0.1
-north_wet = pts_t.loc[pts_t["R_mm_per_h"] > wet_thr_mmph].sort_values("R_mm_per_h", ascending=False)
+# wet_thr_mmph = 0.1
+# north_wet = pts_t.loc[pts_t["R_mm_per_h"] > wet_thr_mmph].sort_values("R_mm_per_h", ascending=False)
 
-print("north wet links:", len(north_wet))
-north_wet.head(20)
-north_wet_ids = north_wet["ID"].unique()
+# print("north wet links:", len(north_wet))
+# north_wet.head(20)
+# north_wet_ids = north_wet["ID"].unique()
 
 
 
-def plot_link_prime_diagnostics(link_id, t0=None, t1=None):
-    # link_id in dfA/df_rate uses link_id == ID
-    a = dfA[dfA["link_id"] == link_id].copy()
-    r = df_rate[df_rate["link_id"] == link_id].copy()
+# def plot_link_prime_diagnostics(link_id, t0=None, t1=None):
+#     # link_id in dfA/df_rate uses link_id == ID
+#     a = dfA[dfA["link_id"] == link_id].copy()
+#     r = df_rate[df_rate["link_id"] == link_id].copy()
 
-    if a.empty:
-        print("No dfA rows for", link_id); return
-    a["time"] = pd.to_datetime(a["time"], utc=True, errors="coerce").dt.tz_localize(None)
-    r["time"] = pd.to_datetime(r["time"], utc=True, errors="coerce").dt.tz_localize(None)
+#     if a.empty:
+#         print("No dfA rows for", link_id); return
+#     a["time"] = pd.to_datetime(a["time"], utc=True, errors="coerce").dt.tz_localize(None)
+#     r["time"] = pd.to_datetime(r["time"], utc=True, errors="coerce").dt.tz_localize(None)
 
-    if t0 is not None:
-        t0 = pd.Timestamp(t0)
-        a = a[a["time"] >= t0]; r = r[r["time"] >= t0]
-    if t1 is not None:
-        t1 = pd.Timestamp(t1)
-        a = a[a["time"] <= t1]; r = r[r["time"] <= t1]
+#     if t0 is not None:
+#         t0 = pd.Timestamp(t0)
+#         a = a[a["time"] >= t0]; r = r[r["time"] >= t0]
+#     if t1 is not None:
+#         t1 = pd.Timestamp(t1)
+#         a = a[a["time"] <= t1]; r = r[r["time"] <= t1]
 
-    fig, ax = plt.subplots(4, 1, figsize=(14, 9), sharex=True)
+#     fig, ax = plt.subplots(4, 1, figsize=(14, 9), sharex=True)
 
-    ax[0].plot(a["time"], a["sig_db"], lw=1, label="sig_db")
-    ax[0].plot(a["time"], a["baseline_rsl"], lw=2, label="baseline (q90 past-only)")
-    ax[0].set_ylabel("dB-ish"); ax[0].legend(); ax[0].grid(alpha=0.2)
+#     ax[0].plot(a["time"], a["sig_db"], lw=1, label="sig_db")
+#     ax[0].plot(a["time"], a["baseline_rsl"], lw=2, label="baseline (q90 past-only)")
+#     ax[0].set_ylabel("dB-ish"); ax[0].legend(); ax[0].grid(alpha=0.2)
 
-    ax[1].plot(a["time"], a["A_obs_dB"], lw=1, label="A_obs_dB")
-    ax[1].axhline(0.5, ls="--", lw=1, label="wet_thr_db=0.5")  # change if needed
-    ax[1].set_ylabel("dB"); ax[1].legend(); ax[1].grid(alpha=0.2)
+#     ax[1].plot(a["time"], a["A_obs_dB"], lw=1, label="A_obs_dB")
+#     ax[1].axhline(0.5, ls="--", lw=1, label="wet_thr_db=0.5")  # change if needed
+#     ax[1].set_ylabel("dB"); ax[1].legend(); ax[1].grid(alpha=0.2)
 
-    ax[2].plot(a["time"], a["wet_rl"].astype(int), lw=1, label="wet_rl (0/1)")
-    ax[2].set_ylabel("wet"); ax[2].set_yticks([0,1]); ax[2].legend(); ax[2].grid(alpha=0.2)
+#     ax[2].plot(a["time"], a["wet_rl"].astype(int), lw=1, label="wet_rl (0/1)")
+#     ax[2].set_ylabel("wet"); ax[2].set_yticks([0,1]); ax[2].legend(); ax[2].grid(alpha=0.2)
 
-    ax[3].plot(r["time"], r["R_mm_per_h"], lw=1, label="R_mm_per_h")
-    ax[3].set_ylabel("mm/h"); ax[3].legend(); ax[3].grid(alpha=0.2)
+#     ax[3].plot(r["time"], r["R_mm_per_h"], lw=1, label="R_mm_per_h")
+#     ax[3].set_ylabel("mm/h"); ax[3].legend(); ax[3].grid(alpha=0.2)
 
-    ax[0].set_title(link_id)
-    plt.tight_layout(); plt.show()
+#     ax[0].set_title(link_id)
+#     plt.tight_layout(); plt.show()
 
-# run on top 3 suspicious north links:
-for lid in north_wet_ids[:3]:
-    plot_link_prime_diagnostics(lid, t0="2025-06-18", t1="2025-06-20")
+# # run on top 3 suspicious north links:
+# for lid in north_wet_ids[:3]:
+#     plot_link_prime_diagnostics(lid, t0="2025-06-18", t1="2025-06-20")
 
 
 #%%
 # %%
 # %%
-import numpy as np
-import xarray as xr
-import pandas as pd
-import matplotlib.pyplot as plt
+# import numpy as np
+# import xarray as xr
+# import pandas as pd
+# import matplotlib.pyplot as plt
 
-# --- load ---
-ds = xr.open_dataset(out_file)
+# # --- load ---
+# ds = xr.open_dataset(out_file)
 
-# --- red-spot definition (same as before) ---
-t0 = pd.Timestamp("2025-06-19 16:15:00")
-lon0, lat0 = -2.25, 6.20
-R_km = 25.0
+# # --- red-spot definition (same as before) ---
+# t0 = pd.Timestamp("2025-06-19 16:15:00")
+# lon0, lat0 = -2.25, 6.20
+# R_km = 25.0
 
-# --- find links within radius (same logic as before) ---
-lon = ds["link_lon"].values.astype(float)
-lat = ds["link_lat"].values.astype(float)
-ids = ds["link_id"].values
+# # --- find links within radius (same logic as before) ---
+# lon = ds["link_lon"].values.astype(float)
+# lat = ds["link_lat"].values.astype(float)
+# ids = ds["link_id"].values
 
-km_per_deg_lat = 111.0
-km_per_deg_lon = 111.0 * np.cos(np.deg2rad(lat0))
-dx = (lon - lon0) * km_per_deg_lon
-dy = (lat - lat0) * km_per_deg_lat
-dist_km = np.sqrt(dx * dx + dy * dy)
+# km_per_deg_lat = 111.0
+# km_per_deg_lon = 111.0 * np.cos(np.deg2rad(lat0))
+# dx = (lon - lon0) * km_per_deg_lon
+# dy = (lat - lat0) * km_per_deg_lat
+# dist_km = np.sqrt(dx * dx + dy * dy)
 
-idx = np.where(dist_km <= R_km)[0]  # link indices in radius
+# idx = np.where(dist_km <= R_km)[0]  # link indices in radius
 
-# --- rank links by intensity at t0 and take top N ---
-rpt_t0 = ds["R_point_mm_per_h"].sel(time=t0).isel(link=idx).values.astype(float)
-good = np.isfinite(rpt_t0)
-idx2 = idx[good]
-rpt2 = rpt_t0[good]
+# # --- rank links by intensity at t0 and take top N ---
+# rpt_t0 = ds["R_point_mm_per_h"].sel(time=t0).isel(link=idx).values.astype(float)
+# good = np.isfinite(rpt_t0)
+# idx2 = idx[good]
+# rpt2 = rpt_t0[good]
 
-order = np.argsort(rpt2)[::-1]  # high -> low
-topN = 5  # change to 3, 5, 10...
-top_idx = idx2[order[:topN]]
+# order = np.argsort(rpt2)[::-1]  # high -> low
+# topN = 5  # change to 3, 5, 10...
+# top_idx = idx2[order[:topN]]
 
-# --- time window around t0 ---
-t1 = t0 - pd.Timedelta("75min")   # e.g., 15:00 if t0=16:15
-t2 = t0 + pd.Timedelta("45min")   # e.g., 17:00
-da = ds["R_point_mm_per_h"].sel(time=slice(t1, t2)).isel(link=top_idx)
-dist = dist_km[L]
-lbl = f"{str(ids[L])[:35]}...  ({dist:.1f} km)"
+# # --- time window around t0 ---
+# t1 = t0 - pd.Timedelta("75min")   # e.g., 15:00 if t0=16:15
+# t2 = t0 + pd.Timedelta("45min")   # e.g., 17:00
+# da = ds["R_point_mm_per_h"].sel(time=slice(t1, t2)).isel(link=top_idx)
+# dist = dist_km[L]
+# lbl = f"{str(ids[L])[:35]}...  ({dist:.1f} km)"
 
 
-# --- plot time series for top links ---
-plt.figure(figsize=(11, 4.2))
-for j, L in enumerate(top_idx):
-    y = da.isel(link=j).values.astype(float)
-    dist = dist_km[L]
-    lbl = f"{str(ids[L])[:35]}...  ({dist:.1f} km)"
-    plt.plot(da["time"].values, y, marker="o", lw=2, label=lbl)
+# # --- plot time series for top links ---
+# plt.figure(figsize=(11, 4.2))
+# for j, L in enumerate(top_idx):
+#     y = da.isel(link=j).values.astype(float)
+#     dist = dist_km[L]
+#     lbl = f"{str(ids[L])[:35]}...  ({dist:.1f} km)"
+#     plt.plot(da["time"].values, y, marker="o", lw=2, label=lbl)
 
-plt.grid(alpha=0.25)
-plt.ylabel("R_point_mm_per_h [mm h$^{-1}$]")
-plt.xlabel("time (UTC)")
-plt.title(f"Top {topN} link midpoint rain rates within {R_km} km of (lon={lon0}, lat={lat0})")
-plt.legend(loc="upper right", fontsize=8)
-plt.tight_layout()
-plt.show()
+# plt.grid(alpha=0.25)
+# plt.ylabel("R_point_mm_per_h [mm h$^{-1}$]")
+# plt.xlabel("time (UTC)")
+# plt.title(f"Top {topN} link midpoint rain rates within {R_km} km of (lon={lon0}, lat={lat0})")
+# plt.legend(loc="upper right", fontsize=8)
+# plt.tight_layout()
+# plt.show()
+
+#%%
+# t = pd.Timestamp("2025-06-19 16:15:00")
+
+# meta_xy = (
+#     df_clean.reset_index()[["ID","XStart","YStart","XEnd","YEnd"]]
+#     .drop_duplicates("ID")
+# )
+
+# R1, d1 = grid_rain_at_time_rainlink(
+#     df_s5=df_s5[["ID", "R_mm_per_h"]],
+#     df_meta_for_xy=meta_xy,
+#     t=t,                      # naive UTC timestamp present in df_s5.index
+
+#     # RainLINK-OK parameters:
+#     grid_res_deg=0.03,
+#     domain_pad_deg=0.20,
+#     wet_thr=1.0,
+#     dry_thr=0.0,
+#     ok_model="exponential",
+#     ok_range_km=15.0,
+#     ok_nugget_frac=0.5,
+#     min_pts_ok=50,
+#     support_k=4,
+#     support_radius_km=40.0,
+#     drizzle_to_zero=0.5,     # you can change from default 0.10 if you like
+#     n_jobs=15,                 # or >1 if you want parallel
+#     parallel_backend_name="processes",
+#     outside_support_fill=np.nan,
+#     insufficient_training_fill=np.nan,
+#     smooth_kernel_px=3,
+#     smooth_fill_holes=True,
+# )
+
+# print(d1)
+# R1.plot(cmap='Spectral_r',vmax=15)
+
+# # If you already have a 2-D slice:
+# R2d = R1  # (lat,lon)
+
+# # meta_xy_grid returned by prepare_inputs_for_gridding, OR meta_xy you built
+# plot_grid_with_wetdry_midpoints_discrete_linear(
+#     R2d[0], df_s5, meta_xy_grid, t,
+#     wet_thr_mmph=0.1,
+#     extent=(-3.25, 1.2, 4.8, 11.15),
+#     n_bins=15,   # 12 linear discrete steps
+#     vmin=0.0,
+#     vmax=15,  
+#     cmap="Spectral_r",
+# )

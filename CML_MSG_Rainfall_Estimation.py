@@ -227,16 +227,16 @@ def kstd_by_lat_xr(lat_grid, dtrans=0.5):
     """
 
     kstd = xr.where(
-        lat_grid < 5 - dtrans / 2, 0.95,  # Coastal Savanna
+        lat_grid < 5 - dtrans / 2, 0.9,  # Coastal Savanna, 0.95
         xr.where(
             lat_grid < 5 + dtrans / 2,
-            0.95 + (lat_grid - (5 - dtrans / 2)) / dtrans * (1.00 - 0.95),
+            0.9 + (lat_grid - (5 - dtrans / 2)) / dtrans * (0.95 - 0.9), # 1.00
             xr.where(
-                lat_grid < 8 - dtrans / 2, 1.00,  # Forest / Transition
+                lat_grid < 8 - dtrans / 2, 0.90,  # Forest / Transition
                 xr.where(
                     lat_grid < 8 + dtrans / 2,
-                    1.00 + (lat_grid - (8 - dtrans / 2)) / dtrans * (1.05 - 1.00),
-                    1.05  # Guinea Savanna and beyond
+                    0.90 + (lat_grid - (8 - dtrans / 2)) / dtrans * (1.0 - 0.90),
+                    1.0  # Guinea Savanna and beyond
                 )
             )
         )
@@ -1169,7 +1169,7 @@ def add_geo(ax):
 
 da = Rd  # your DataArray (y=lat, x=lon)
 da = da.sortby("y")  # safety: ensures south->north increasing
-daily_bins = np.arange(0,35,1.5)
+daily_bins = np.arange(0,40,2.5)
 # [
 #     0,   1,   2,   5,   10,
 #     20,  30,  40
@@ -1266,8 +1266,8 @@ plt.show()
 #%%
 f,xx = plt.subplots()
 xx.plot(Rd.mean(dim='x').values,Rd.mean(dim='x')['y'].values,label='CML-SAT')
-# xx.plot(imerg_daily_xarr[2].mean(dim='lon').values,imerg_daily_xarr[2].mean(dim='lon')['lat'].values,label='IMERG')
-# xx.plot(era5_daily_data[2].mean(dim='longitude').values,era5_daily_data[2].mean(dim='longitude')['latitude'].values,label='ERA5')
+xx.plot(imerg_daily_xarr[2].mean(dim='lon').values,imerg_daily_xarr[2].mean(dim='lon')['lat'].values,label='IMERG')
+xx.plot(era5_daily_data[2].mean(dim='longitude').values,era5_daily_data[2].mean(dim='longitude')['latitude'].values,label='ERA5')
 xx.set_title(f"Daily total predicted rainfall\n{str(pd.to_datetime(R15['time'].values[0]).normalize())}")
 xx.set_xlabel("mm day$^{-1}$")
 xx.set_ylabel("Latitude")
