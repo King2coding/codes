@@ -28,7 +28,8 @@ path_to_msg_ir_fls = r'/home/kkumah/Projects/cml-stuff/satellite_data/msg_val'
 path_to_msg_clm_fls = r'/home/kkumah/Projects/cml-stuff/satellite_data/msg_clm_val'
 path_to_put_15min_cml_rainfall_estimates = r'/home/kkumah/Projects/cml-stuff/out_rain_trials/out_15min'
 # r'/home/kkumah/Projects/cml-stuff/out_15min_cml_rain_oper'
-path_to_put_daily_cml_rainfall_estimates = r'/home/kkumah/Projects/cml-stuff/out_rain_trials/out_daily_no_smooth_strict_lat_params'
+path_to_put_daily_cml_rainfall_estimates = r'/home/kkumah/Projects/cml-stuff/out_rain_trials/new_out_daily'
+# r'/home/kkumah/Projects/cml-stuff/out_rain_trials/out_daily_no_smooth_strict_lat_params'
 # r'/home/kkumah/Projects/cml-stuff/out_rain_trials/out_daily'
 # r'/home/kkumah/Projects/cml-stuff/out_daily_cml_rain_oper'
 
@@ -39,11 +40,11 @@ path_to_ml_model = r'/home/kkumah/Projects/cml-stuff/out_train_model'
 # load model later
 boosters_by_q = joblib.load(os.path.join(
                             path_to_ml_model,
-                            'xgb_quantile_models_ghana_oper_20251229.pkl'))
+                            'xgb_quantile_models_ghana_oper_20260225.pkl'))
 
 meta = joblib.load(os.path.join(
                    path_to_ml_model, 
-                   'xgb_quantile_models_ghana_oper_20251229_meta.pkl'))
+                   'xgb_quantile_models_ghana_oper_20260225_meta.pkl'))
 qs_dense = meta["qs_dense"]
 
 # 15-min cadence (CML); adjust if you prefer per-minute
@@ -1135,6 +1136,10 @@ for day in days:
 
     save_day_files(R15, Rd, day_str, alg="V1", producer="K. K. Kumah")
 
+print("Done.")
+print('*'*50)
+
+xxx
 
 #%%
 # plot using cartopy to show boundary
@@ -1164,7 +1169,7 @@ def add_geo(ax):
 
 da = Rd  # your DataArray (y=lat, x=lon)
 da = da.sortby("y")  # safety: ensures south->north increasing
-daily_bins = np.arange(0,60,5)
+daily_bins = np.arange(0,35,1.5)
 # [
 #     0,   1,   2,   5,   10,
 #     20,  30,  40
@@ -1261,8 +1266,8 @@ plt.show()
 #%%
 f,xx = plt.subplots()
 xx.plot(Rd.mean(dim='x').values,Rd.mean(dim='x')['y'].values,label='CML-SAT')
-xx.plot(imerg_daily_xarr[2].mean(dim='lon').values,imerg_daily_xarr[2].mean(dim='lon')['lat'].values,label='IMERG')
-xx.plot(era5_daily_data[2].mean(dim='longitude').values,era5_daily_data[2].mean(dim='longitude')['latitude'].values,label='ERA5')
+# xx.plot(imerg_daily_xarr[2].mean(dim='lon').values,imerg_daily_xarr[2].mean(dim='lon')['lat'].values,label='IMERG')
+# xx.plot(era5_daily_data[2].mean(dim='longitude').values,era5_daily_data[2].mean(dim='longitude')['latitude'].values,label='ERA5')
 xx.set_title(f"Daily total predicted rainfall\n{str(pd.to_datetime(R15['time'].values[0]).normalize())}")
 xx.set_xlabel("mm day$^{-1}$")
 xx.set_ylabel("Latitude")

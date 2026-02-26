@@ -18,7 +18,8 @@ import rioxarray
 #%% Define working directory
 imerg_dir = '/home/kkumah/Projects/cml-stuff/satellite_data/imergv07/data'
 era5_dir = '/home/kkumah/Projects/cml-stuff/satellite_data/era5'
-cml_sat_15min_dir = '/home/kkumah/Projects/cml-stuff/out_15min_cml_rain_oper'
+cml_sat_15min_dir = r'/home/kkumah/Projects/cml-stuff/new_out_cml_Rain'
+# '/home/kkumah/Projects/cml-stuff/out_15min_cml_rain_oper'
 cml_sat_daily_dir = r'/home/kkumah/Projects/cml-stuff/out_rain_trials/out_daily_no_smooth_strict_lat_params'
 # r'/home/kkumah/Projects/cml-stuff/out_rain_trials/out_daily_no_smooth_strict_lat_params'
 # r'/home/kkumah/Projects/cml-stuff/out_rain_trials/out_daily'

@@ -25,7 +25,8 @@ from sklearn.metrics import mean_squared_error
 
 #%%
 # define paths
-PATH_CML_RAIN = r'/home/kkumah/Projects/cml-stuff/out_cml_rain_dir'
+PATH_CML_RAIN = r'/home/kkumah/Projects/cml-stuff/new_out_cml_Rain'
+# r'/home/kkumah/Projects/cml-stuff/out_cml_rain_dir'
 # r'/home/kkumah/Projects/cml-stuff/out_cml_rain_dir_2025-11-17'
 # 
 PATH_MSG_BT = r'/home/kkumah/Projects/cml-stuff/satellite_data/msg'
