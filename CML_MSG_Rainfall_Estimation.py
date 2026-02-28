@@ -318,7 +318,7 @@ def low_or_q70_quantile_reducer(
     Yq,
     qs,
     q_thresh=0.30,
-    q_high=0.70,
+    q_high=0.85,
 ):
     """
     Minimal pixel-local conditional quantile reducer.
