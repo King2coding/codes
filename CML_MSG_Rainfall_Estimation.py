@@ -227,16 +227,16 @@ def kstd_by_lat_xr(lat_grid, dtrans=0.5):
     """
 
     kstd = xr.where(
-        lat_grid < 5 - dtrans / 2, 0.95,  # Coastal Savanna, 0.95
+        lat_grid < 5 - dtrans / 2, 1.00,  # Coastal Savanna, 0.95
         xr.where(
             lat_grid < 5 + dtrans / 2,
-            0.95 + (lat_grid - (5 - dtrans / 2)) / dtrans * (1.00 - 0.95), # 1.00
+            1.00 + (lat_grid - (5 - dtrans / 2)) / dtrans * (1.05 - 1.00), # 1.00
             xr.where(
                 lat_grid < 8 - dtrans / 2, 0.89,  # Forest / Transition
                 xr.where(
                     lat_grid < 8 + dtrans / 2,
                     0.89 + (lat_grid - (8 - dtrans / 2)) / dtrans * (1.0 - 0.89),
-                    1.05  # Guinea Savanna and beyond
+                    1.1  # Guinea Savanna and beyond
                 )
             )
         )

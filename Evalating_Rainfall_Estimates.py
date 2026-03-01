@@ -905,7 +905,7 @@ fig, axs = plot_precip_1x2_compare_ghana(
     lats=imerg_ghana_2dmean.latitude.values,
     titles=["IMERG", "ERA5", "CML-SAT"],
     vmin=0,
-    vmax=25
+    vmax=8
 )
 gc.collect()
 
