@@ -318,7 +318,7 @@ def low_or_q70_quantile_reducer(
     Yq,
     qs,
     q_thresh=0.30,
-    q_high=0.80,
+    q_high=0.78,
 ):
     """
     Minimal pixel-local conditional quantile reducer.
@@ -851,7 +851,7 @@ def predict_slice_regime_conditional_meanq(
         Yq=Yq,
         qs=qs_dense,
         q_thresh=0.30,   # below this → mean(0–0.3)
-        q_high=0.80,     # above → q70
+        q_high=0.75,     # above → q70
     )
 
     # --------------------------------------------------

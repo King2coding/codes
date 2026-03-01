@@ -795,7 +795,6 @@ def add_regression_line(ax, x, y, color, xlim):
 
     return slope, intercept, mask
 
-
 #%% Main processing
 # 1) Read and preprocess IMERG data day by day
 daily_xr = []
