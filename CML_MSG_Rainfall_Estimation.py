@@ -227,16 +227,16 @@ def kstd_by_lat_xr(lat_grid, dtrans=0.5):
     """
 
     kstd = xr.where(
-        lat_grid < 5 - dtrans / 2, 0.85,  # Coastal Savanna, 0.95
+        lat_grid < 5 - dtrans / 2, 0.95,  # Coastal Savanna, 0.95
         xr.where(
             lat_grid < 5 + dtrans / 2,
-            0.85 + (lat_grid - (5 - dtrans / 2)) / dtrans * (0.95 - 0.85), # 1.00
+            0.95 + (lat_grid - (5 - dtrans / 2)) / dtrans * (1.00 - 0.95), # 1.00
             xr.where(
                 lat_grid < 8 - dtrans / 2, 0.89,  # Forest / Transition
                 xr.where(
                     lat_grid < 8 + dtrans / 2,
                     0.89 + (lat_grid - (8 - dtrans / 2)) / dtrans * (1.0 - 0.89),
-                    1.0  # Guinea Savanna and beyond
+                    1.05  # Guinea Savanna and beyond
                 )
             )
         )
@@ -318,7 +318,7 @@ def low_or_q70_quantile_reducer(
     Yq,
     qs,
     q_thresh=0.30,
-    q_high=0.85,
+    q_high=0.80,
 ):
     """
     Minimal pixel-local conditional quantile reducer.
@@ -851,7 +851,7 @@ def predict_slice_regime_conditional_meanq(
         Yq=Yq,
         qs=qs_dense,
         q_thresh=0.30,   # below this → mean(0–0.3)
-        q_high=0.70,     # above → q70
+        q_high=0.80,     # above → q70
     )
 
     # --------------------------------------------------
@@ -972,7 +972,7 @@ def open_and_prepare_msg_day(day_str,
 # PREDICT 15-MIN FOR A DAY
 # -------------------------
 def predict_day_15min(msg_bt_ll, msg_clm_ll, *,
-                      win_smooth=('No', 3), apply_patch=True, 
+                      win_smooth=('Yes', 3), apply_patch=True, 
                       drizzle_floor):
     # build masks & features (same as your draft)
     ds_bt = msg_bt_ll.copy()
@@ -1127,7 +1127,7 @@ for day in days:
         continue
 
     R15 = predict_day_15min(msg_bt_ll, msg_clm_ll,
-                            win_smooth=('No', 3), 
+                            win_smooth=('Yes', 3), 
                             apply_patch=True, 
                             drizzle_floor=0.03, 
                             )
@@ -1169,7 +1169,7 @@ def add_geo(ax):
 
 da = Rd  # your DataArray (y=lat, x=lon)
 da = da.sortby("y")  # safety: ensures south->north increasing
-daily_bins = np.arange(0,40,2.5)
+daily_bins = np.arange(0,70.25,2.5)
 # [
 #     0,   1,   2,   5,   10,
 #     20,  30,  40

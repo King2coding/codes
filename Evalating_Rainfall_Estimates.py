@@ -40,7 +40,7 @@ era5_file = os.path.join(era5_dir, 'ERA5_total_precipitation_2025_09_12_Ghana.nc
 bbox = (-4.0, 1.25, 4.5, 11.25)
 cde_run_dte = datetime.today().strftime('%Y%m%d')
 
-days = pd.date_range("2025-09-01", "2025-12-29", freq="D")
+days = pd.date_range("2025-09-01", "2025-09-16", freq="D")# "2025-12-29"
 
 mpl.rcParams['font.family'] = 'serif'
 mpl.rcParams['font.serif'] = ['DejaVu Serif', 'Times', 'serif']
@@ -905,7 +905,7 @@ fig, axs = plot_precip_1x2_compare_ghana(
     lats=imerg_ghana_2dmean.latitude.values,
     titles=["IMERG", "ERA5", "CML-SAT"],
     vmin=0,
-    vmax=5
+    vmax=25
 )
 gc.collect()
 
@@ -928,7 +928,7 @@ plot_latitude_profiles(
     imerg_ghana_zonalmean,   #  IMERG 1D DataArray
     era5_ghana_zonalmean,    #  ERA5 1D DataArray
     cml_sat_ghana_zonalmean, #  CML-SAT 1D DataArray
-    xlim=(0, 8),
+    xlim=(0, 18),
     title="Latitudinal Mean Rainfall"
 )
 gc.collect()
