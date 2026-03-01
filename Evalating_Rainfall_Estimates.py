@@ -40,7 +40,7 @@ era5_file = os.path.join(era5_dir, 'ERA5_total_precipitation_2025_09_12_Ghana.nc
 bbox = (-4.0, 1.25, 4.5, 11.25)
 cde_run_dte = datetime.today().strftime('%Y%m%d')
 
-days = pd.date_range("2025-09-01", "2025-09-16", freq="D")# "2025-12-29"
+days = pd.date_range("2025-09-01", "2025-12-29", freq="D")# "2025-12-29"
 
 mpl.rcParams['font.family'] = 'serif'
 mpl.rcParams['font.serif'] = ['DejaVu Serif', 'Times', 'serif']
