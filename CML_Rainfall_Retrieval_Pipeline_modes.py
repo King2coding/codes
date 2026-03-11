@@ -1708,6 +1708,218 @@ def save_daily_grid_and_points_netcdf(
 
     ds.to_netcdf(fn, engine=engine, encoding=enc, unlimited_dims={"time"})
     return fn
+
+import os
+import numpy as np
+import pandas as pd
+import xarray as xr
+from datetime import datetime, timezone
+
+def save_15min_grid_and_points_netcdf(
+    R_da_day: xr.DataArray,          # (time, lat, lon) for one day (or any time range)
+    df_s5_day: pd.DataFrame,         # time-indexed; cols: ID, R_mm_per_h
+    meta_xy: pd.DataFrame,           # cols: ID, XStart, YStart, XEnd, YEnd
+    out_dir: str,
+    day: pd.Timestamp | str,         # e.g. "2025-06-19" (used for folder naming / filtering)
+    base_name: str = "ghana_cml_R_15min",
+    *,
+    var_grid: str = "R_mm_per_h",
+    var_point: str = "R_point_mm_per_h",
+    engine: str = "netcdf4",
+    complevel: int = 5,
+    dtype: str = "float32",
+    fill_value: float = -9999.0,
+    chunks_lat: int = 256,
+    chunks_lon: int = 256,
+    chunks_link: int = 2048,
+
+    # metadata knobs
+    version: str = "V1",
+    title: str | None = None,
+    summary: str | None = None,
+    producer_name: str = "Trans-African Hydro-Meteorological Observatory (TAHMO)",
+    institution: str = "TAHMO",
+    creator_name: str  = "Kingsley Kumah",
+    creator_email: str | None = None,
+    project: str = "PRIME Ghana CML rainfall retrieval",
+    source: str = "Commercial Microwave Links (CML); RainLINK-like processing; Ordinary Kriging gridding",
+    references: str | None = None,
+    comment: str | None = None,
+    conventions: str = "CF-1.8",
+
+    # file naming
+    ts_fmt: str = "%Y%m%dT%H%M%SZ",   # e.g., 20250619T161500Z
+):
+    """
+    Writes ONE NetCDF PER TIME STEP (e.g., 15-min).
+    Each file contains:
+      - var_grid(lat, lon): rainfall map at that timestamp
+      - var_point(link): link midpoint rainfall at that timestamp
+      - link geometry variables (link_lon, link_lat, link_id)
+      - time as a scalar coordinate (or length-1 time dim, depending on preference)
+    Returns list of written filenames.
+    """
+
+    os.makedirs(out_dir, exist_ok=True)
+    day_date = pd.Timestamp(day).date()
+
+    # --- grid times ---
+    t_grid = pd.to_datetime(R_da_day["time"].values)
+    t_grid = pd.DatetimeIndex(t_grid).tz_localize(None)
+
+    # --- points times from df index ---
+    df = df_s5_day.copy()
+    idx = df.index
+    if getattr(idx, "tz", None) is not None:
+        idx = idx.tz_convert("UTC").tz_localize(None)
+    df.index = pd.DatetimeIndex(idx)
+
+    # Restrict to day (optional but consistent with your old function)
+    df = df[df.index.date == day_date]
+
+    # --- link midpoints ---
+    m = meta_xy.drop_duplicates("ID").copy()
+    for c in ["XStart", "YStart", "XEnd", "YEnd"]:
+        m[c] = pd.to_numeric(m[c], errors="coerce")
+    m = m.dropna(subset=["XStart", "YStart", "XEnd", "YEnd"])
+
+    m["lon_mid"] = 0.5 * (m["XStart"] + m["XEnd"])
+    m["lat_mid"] = 0.5 * (m["YStart"] + m["YEnd"])
+
+    link_ids = m["ID"].astype(str).values
+    n_link = len(link_ids)
+    id2j = {lid: j for j, lid in enumerate(link_ids)}
+
+    # pre-extract geometry vectors
+    link_lon = m["lon_mid"].to_numpy(float)
+    link_lat = m["lat_mid"].to_numpy(float)
+
+    # created stamp (global)
+    created = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    day_str_iso = pd.Timestamp(day_date).strftime("%Y-%m-%d")
+
+    if title is None:
+        title = f"Ghana CML rainfall (single time-step files) — {day_str_iso}"
+    if summary is None:
+        summary = (
+            "NetCDF per 15-min time step containing (1) gridded rainfall map over Ghana and "
+            "(2) corresponding link-level rainfall rates assigned to link midpoints."
+        )
+
+    written = []
+
+    # --- iterate over each time ---
+    for tt in t_grid:
+        # 1) grid slice (lat, lon)
+        grid_t = R_da_day.sel(time=tt).astype(dtype).rename(var_grid)
+
+        # 2) link vector (link,)
+        rlink = np.full((n_link,), np.nan, dtype=np.float32)
+        g = df.loc[df.index == tt]
+        if isinstance(g, pd.Series):
+            g = g.to_frame().T
+        if g is not None and len(g) > 0:
+            for _, row in g.iterrows():
+                lid = str(row.get("ID"))
+                j = id2j.get(lid, None)
+                if j is None:
+                    continue
+                val = pd.to_numeric(row.get("R_mm_per_h"), errors="coerce")
+                if np.isfinite(val):
+                    rlink[j] = float(val)
+
+        # 3) dataset (single step)
+        # keep a length-1 time dimension for CF-friendliness
+        ds = xr.Dataset(
+            data_vars={
+                var_grid: grid_t.expand_dims(time=[np.datetime64(tt)]),
+                var_point: (("time", "link"), rlink.reshape(1, -1)),
+                "link_lon": (("link",), link_lon),
+                "link_lat": (("link",), link_lat),
+                "link_id":  (("link",), link_ids),
+            },
+            coords={
+                "time": np.array([np.datetime64(tt)], dtype="datetime64[ns]"),
+                "lat": grid_t["lat"].values,
+                "lon": grid_t["lon"].values,
+                "link": np.arange(n_link, dtype=int),
+            }
+        )
+
+        # variable attrs
+        ds[var_grid].attrs.update({
+            "long_name": "Gridded rainfall rate from CML",
+            "units": "mm h-1",
+        })
+        ds[var_point].attrs.update({
+            "long_name": "Link midpoint rainfall rate",
+            "units": "mm h-1",
+        })
+        ds["link_lon"].attrs.update({"long_name": "Link midpoint longitude", "units": "degrees_east"})
+        ds["link_lat"].attrs.update({"long_name": "Link midpoint latitude", "units": "degrees_north"})
+        ds["link_id"].attrs.update({"long_name": "CML link identifier"})
+        ds["lat"].attrs.update({"standard_name": "latitude", "units": "degrees_north"})
+        ds["lon"].attrs.update({"standard_name": "longitude", "units": "degrees_east"})
+        ds["time"].attrs.update({"standard_name": "time"})
+
+        # global attrs (include timestamp-specific coverage)
+        ds.attrs.update({
+            "Conventions": conventions,
+            "title": title,
+            "summary": summary,
+            "product_version": version,
+            "institution": institution,
+            "producer_name": producer_name,
+            "project": project,
+            "source": source,
+            "history": f"{created}: created 15-min grid+points NetCDF",
+            "date_created": created,
+            "time_coverage_start": str(pd.Timestamp(tt)),
+            "time_coverage_end": str(pd.Timestamp(tt)),
+            "geospatial_lat_min": float(np.nanmin(ds["lat"].values)),
+            "geospatial_lat_max": float(np.nanmax(ds["lat"].values)),
+            "geospatial_lon_min": float(np.nanmin(ds["lon"].values)),
+            "geospatial_lon_max": float(np.nanmax(ds["lon"].values)),
+            "creator_name": creator_name,
+        })
+        if creator_email is not None:
+            ds.attrs["creator_email"] = creator_email
+        if references is not None:
+            ds.attrs["references"] = references
+        if comment is not None:
+            ds.attrs["comment"] = comment
+
+        # encoding / compression
+        enc = {
+            var_grid: {
+                "zlib": True, "complevel": int(complevel), "shuffle": True,
+                "dtype": dtype, "_FillValue": fill_value,
+                "chunksizes": (1, min(chunks_lat, ds.sizes["lat"]), min(chunks_lon, ds.sizes["lon"])),
+            },
+            var_point: {
+                "zlib": True, "complevel": int(complevel), "shuffle": True,
+                "dtype": dtype, "_FillValue": fill_value,
+                "chunksizes": (1, min(chunks_link, n_link)),
+            },
+            "lat": {"zlib": False},
+            "lon": {"zlib": False},
+            "time": {"zlib": False},
+            "link": {"zlib": False},
+            "link_lon": {"zlib": False},
+            "link_lat": {"zlib": False},
+            "link_id": {"zlib": False},
+        }
+
+        # filename per timestamp
+        ts = pd.Timestamp(tt).tz_localize("UTC")  # label as Z for name
+        fn = os.path.join(out_dir, f"{base_name}_{ts.strftime(ts_fmt)}.nc")
+
+        ds.to_netcdf(fn, engine=engine, encoding=enc)
+        written.append(fn)
+
+        ds.close()
+
+    return written
 #%% Some helper functions for coupling link data to metadata
 from datetime import datetime, timedelta
 

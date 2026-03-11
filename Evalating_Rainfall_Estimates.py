@@ -1571,6 +1571,43 @@ gc.collect()
 # gg = pd.read_csv(os.path.join(gauge_dirv, 'TA00010.csv'))
 # gg.head(5)
 
+
+#-----------------------------------------------------------------
+gauge_pdf = compute_pdf_elements_from_array(gauge_daily_df.values, bins)
+
+fnt_size = 13
+fg, axes = plt.subplots(figsize=(5, 5), sharey=True, constrained_layout=True)
+lw = 3.5
+# plot global pdfs
+axes.plot(bins,imerg_pdf['pdfv'], 
+             label='IMERG', lw=lw, c='k', ls='-')
+axes.plot(bins,era5_pdf['pdfv'], 
+             label='ERA5', lw=lw, c='orange', ls='-')
+axes.plot(bins,cml_sat_pdf['pdfv'], 
+             label='CML-SAT', lw=lw, c='b',ls='-')
+
+axes.plot(bins,gauge_pdf['pdfv'], 
+             label='Gauge', lw=lw, c='g',ls='-')
+
+axes.set_xscale('log')
+
+axes.legend(fontsize=fnt_size, frameon=False, loc='best')
+
+axes.set_ylabel('PDFv', fontsize=fnt_size)
+
+axes.set_xlabel('Rainfall [mm/day]', fontsize=fnt_size)
+
+axes.minorticks_on()
+axes.tick_params(axis='both', which='major', length=7, width=1.2, labelsize=fnt_size)
+axes.tick_params(axis='both', which='minor', length=4, width=0.8)
+# Show only left and bottom axis
+axes.spines['top'].set_visible(False)
+axes.spines['right'].set_visible(False)
+axes.spines['left'].set_linewidth(1.2)
+axes.spines['bottom'].set_linewidth(1.2)
+
+plt.tight_layout()
+gc.collect()
 #%%
 #%%
 def kstd_by_lat(lat):
