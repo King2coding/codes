@@ -1920,6 +1920,173 @@ def save_15min_grid_and_points_netcdf(
         ds.close()
 
     return written
+
+def save_15min_grid_and_points_netcdf_for_day(
+    R_da: xr.DataArray,              # can be multi-day; we will filter to `day`
+    df_s5: pd.DataFrame,             # can be multi-day; we will filter to `day`
+    meta_xy: pd.DataFrame,
+    out_dir: str,
+    day: pd.Timestamp | str,
+    base_name: str = "ghana_cml_R_15min",
+    *,
+    var_grid: str = "R_mm_per_h",
+    var_point: str = "R_point_mm_per_h",
+    engine: str = "netcdf4",
+    complevel: int = 5,
+    dtype: str = "float32",
+    fill_value: float = -9999.0,
+    chunks_lat: int = 256,
+    chunks_lon: int = 256,
+    chunks_link: int = 2048,
+    version: str = "V1",
+    conventions: str = "CF-1.8",
+    creator_name: str = "Kingsley Kumah",
+    creator_email: str | None = None,
+    institution: str = "TAHMO",
+    producer_name: str = "Trans-African Hydro-Meteorological Observatory (TAHMO)",
+    project: str = "PRIME Ghana CML rainfall retrieval",
+    source: str = "Commercial Microwave Links (CML); RainLINK-like processing; Ordinary Kriging gridding",
+    references: str | None = None,
+    comment: str | None = None,
+    ts_fmt: str = "%Y%m%dT%H%M%SZ",
+):
+    os.makedirs(out_dir, exist_ok=True)
+    day_ts = pd.Timestamp(day).tz_localize(None)
+    day_date = day_ts.date()
+
+    # -------------------------
+    # 1) FILTER GRID TO DAY  ✅
+    # -------------------------
+    t_all = pd.to_datetime(R_da["time"].values)
+    t_all = pd.DatetimeIndex(t_all).tz_localize(None)
+
+    mask_day = (t_all.date == day_date)
+    if mask_day.sum() == 0:
+        raise ValueError(f"No grid times found for day={day_date} in R_da.time")
+
+    R_day = R_da.sel(time=t_all[mask_day].values)
+
+    # master time axis (grid times for requested day only)
+    times = pd.to_datetime(R_day["time"].values)
+    times = pd.DatetimeIndex(times).tz_localize(None)
+
+    # -------------------------
+    # 2) FILTER POINTS TO DAY ✅
+    # -------------------------
+    df = df_s5.copy()
+    idx = pd.to_datetime(df.index)
+    idx = pd.DatetimeIndex(idx)
+    if idx.tz is not None:
+        idx = idx.tz_convert("UTC").tz_localize(None)
+    else:
+        idx = idx.tz_localize(None)
+    df.index = idx
+    df = df[df.index.date == day_date]
+
+    # -------------------------
+    # 3) LINK MIDPOINT GEOM
+    # -------------------------
+    m = meta_xy.drop_duplicates("ID").copy()
+    for c in ["XStart", "YStart", "XEnd", "YEnd"]:
+        m[c] = pd.to_numeric(m[c], errors="coerce")
+    m = m.dropna(subset=["XStart", "YStart", "XEnd", "YEnd"])
+
+    m["lon_mid"] = 0.5 * (m["XStart"] + m["XEnd"])
+    m["lat_mid"] = 0.5 * (m["YStart"] + m["YEnd"])
+
+    link_ids = m["ID"].astype(str).values
+    n_link = len(link_ids)
+    id2j = {lid: j for j, lid in enumerate(link_ids)}
+    link_lon = m["lon_mid"].to_numpy(float)
+    link_lat = m["lat_mid"].to_numpy(float)
+
+    created = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    day_str_iso = pd.Timestamp(day_date).strftime("%Y-%m-%d")
+
+    written = []
+
+    # -------------------------
+    # 4) WRITE ONE FILE PER TIME
+    # -------------------------
+    for tt in times:
+        # grid slice (lat, lon)
+        grid_t = R_day.sel(time=tt).astype(dtype).rename(var_grid)
+
+        # link vector (link,)
+        rlink = np.full((n_link,), np.nan, dtype=np.float32)
+        g = df.loc[df.index == tt]  # exact match
+        if isinstance(g, pd.Series):
+            g = g.to_frame().T
+        if g is not None and len(g) > 0:
+            for _, row in g.iterrows():
+                lid = str(row.get("ID"))
+                j = id2j.get(lid, None)
+                if j is None:
+                    continue
+                val = pd.to_numeric(row.get("R_mm_per_h"), errors="coerce")
+                if np.isfinite(val):
+                    rlink[j] = float(val)
+
+        ds = xr.Dataset(
+            data_vars={
+                var_grid: grid_t.expand_dims(time=[np.datetime64(tt)]),
+                var_point: (("time", "link"), rlink.reshape(1, -1)),
+                "link_lon": (("link",), link_lon),
+                "link_lat": (("link",), link_lat),
+                "link_id":  (("link",), link_ids),
+            },
+            coords={
+                "time": np.array([np.datetime64(tt)], dtype="datetime64[ns]"),
+                "lat": grid_t["lat"].values,
+                "lon": grid_t["lon"].values,
+                "link": np.arange(n_link, dtype=int),
+            }
+        )
+
+        # attrs
+        ds.attrs.update({
+            "Conventions": conventions,
+            "title": f"Ghana CML rainfall (15-min file) — {day_str_iso}",
+            "summary": "Single time-step NetCDF containing gridded rainfall and corresponding link midpoint rainfall.",
+            "product_version": version,
+            "institution": institution,
+            "producer_name": producer_name,
+            "creator_name": creator_name,
+            "project": project,
+            "source": source,
+            "history": f"{created}: created 15-min grid+points NetCDF",
+            "date_created": created,
+            "time_coverage_start": str(pd.Timestamp(tt)),
+            "time_coverage_end": str(pd.Timestamp(tt)),
+        })
+        if creator_email is not None:
+            ds.attrs["creator_email"] = creator_email
+        if references is not None:
+            ds.attrs["references"] = references
+        if comment is not None:
+            ds.attrs["comment"] = comment
+
+        enc = {
+            var_grid: {
+                "zlib": True, "complevel": int(complevel), "shuffle": True,
+                "dtype": dtype, "_FillValue": fill_value,
+                "chunksizes": (1, min(chunks_lat, ds.sizes["lat"]), min(chunks_lon, ds.sizes["lon"])),
+            },
+            var_point: {
+                "zlib": True, "complevel": int(complevel), "shuffle": True,
+                "dtype": dtype, "_FillValue": fill_value,
+                "chunksizes": (1, min(chunks_link, n_link)),
+            },
+        }
+
+        ts = pd.Timestamp(tt).tz_localize("UTC")
+        fn = os.path.join(out_dir, f"{base_name}_{ts.strftime(ts_fmt)}.nc")
+        ds.to_netcdf(fn, engine=engine, encoding=enc)
+
+        written.append(fn)
+        ds.close()
+
+    return written
 #%% Some helper functions for coupling link data to metadata
 from datetime import datetime, timedelta
 

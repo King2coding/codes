@@ -11,7 +11,7 @@ out_CML_R_path = r'/home/kkumah/Projects/cml-stuff/new_out_15min_oper'
 # e.g Schedule_pfm_SDH_20250919181726281472160571840_1.txt
 matched_metadata = pd.read_csv(os.path.join(metadata_path, 'matched_metadata_kkk_20250527.csv'))
 
-target_date = pd.to_datetime("2025-06-17 23:59:00") # or set to None to use latest available
+target_date = pd.to_datetime("2025-06-25 23:59:00") # or set to None to use latest available
 dt_args = (int(target_date.year), int(target_date.month), int(target_date.day), int(target_date.hour), int(target_date.minute))
 
 manual_latest_dt = datetime(*dt_args) if target_date else None # Example: datetime(2025, 8, 29, 12, 0)
@@ -136,16 +136,16 @@ print(diag_rl)
 
 # print("Wrote:", out_file)
 
-out_files = save_15min_grid_and_points_netcdf(
-    R_da_day=R_da_rl,          # your (time, lat, lon) rainfall
-    df_s5_day=df_s5,   # your link table for that day
+out_files = save_15min_grid_and_points_netcdf_for_day(
+    R_da=R_da_rl,          # your (time, lat, lon) rainfall
+    df_s5=df_s5,   # your link table for that day
     meta_xy=meta_xy_grid,       # link endpoints
     out_dir=out_CML_R_path,
     day=latest_dt.date().strftime('%Y-%m-%d'),
     base_name="Ghana_cml_R",
     version="V1",
 )
-print("Wrote", len(out_files), "files")
+print("Wrote", len(out_files), "files for", latest_dt.date().strftime('%Y-%m-%d'))
 
 # # Optional quick sanity check
 # ds = xr.open_dataset(out_file)
@@ -337,3 +337,13 @@ print("Wrote", len(out_files), "files")
 #     vmax=15,  
 #     cmap="Spectral_r",
 # )
+
+#%%
+df_raw_trbs = df_raw.copy()
+df_raw_trbs['time'] = pd.to_datetime(df_raw_trbs['DateTime'])
+
+df_raw_trbs_sub = df_raw_trbs[df_raw_trbs['time'].dt.date == target_date.date()]
+
+len(df_raw_trbs_sub['ID'].unique())
+
+len(df_raw_trbs_sub['time'].unique())
