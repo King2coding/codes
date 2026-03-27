@@ -2148,6 +2148,7 @@ def save_15min_grid_and_points_netcdf(
 
     return written
 
+#-------------------------------------------------------------------
 def save_15min_grid_and_points_netcdf_for_day(
     R_da: xr.DataArray,              # can be multi-day; we will filter to `day`
     df_s5: pd.DataFrame,             # can be multi-day; we will filter to `day`
@@ -2182,7 +2183,7 @@ def save_15min_grid_and_points_netcdf_for_day(
     day_date = day_ts.date()
 
     # -------------------------
-    # 1) FILTER GRID TO DAY  ✅
+    # 1) FILTER GRID TO DAY
     # -------------------------
     t_all = pd.to_datetime(R_da["time"].values)
     t_all = pd.DatetimeIndex(t_all).tz_localize(None)
@@ -2198,7 +2199,7 @@ def save_15min_grid_and_points_netcdf_for_day(
     times = pd.DatetimeIndex(times).tz_localize(None)
 
     # -------------------------
-    # 2) FILTER POINTS TO DAY ✅
+    # 2) FILTER POINTS TO DAY
     # -------------------------
     df = df_s5.copy()
     idx = pd.to_datetime(df.index)
@@ -2270,7 +2271,9 @@ def save_15min_grid_and_points_netcdf_for_day(
             }
         )
 
-        # attrs
+        # -------------------------
+        # GLOBAL ATTRIBUTES
+        # -------------------------
         ds.attrs.update({
             "Conventions": conventions,
             "title": f"Ghana CML rainfall (15-min file) — {day_str_iso}",
@@ -2292,6 +2295,60 @@ def save_15min_grid_and_points_netcdf_for_day(
             ds.attrs["references"] = references
         if comment is not None:
             ds.attrs["comment"] = comment
+
+        # -------------------------
+        # COORDINATE ATTRIBUTES  <-- ADD/UPDATE THIS BLOCK
+        # -------------------------
+        ds["lat"].attrs.update({
+            "standard_name": "latitude",
+            "long_name": "latitude",
+            "units": "degrees_north",
+            "axis": "Y",
+        })
+        ds["lon"].attrs.update({
+            "standard_name": "longitude",
+            "long_name": "longitude",
+            "units": "degrees_east",
+            "axis": "X",
+        })
+        ds["time"].attrs.update({
+            "standard_name": "time",
+            "long_name": "time",
+        })
+
+        ds["link_lon"].attrs.update({
+            "long_name": "Link midpoint longitude",
+            "units": "degrees_east",
+        })
+        ds["link_lat"].attrs.update({
+            "long_name": "Link midpoint latitude",
+            "units": "degrees_north",
+        })
+        ds["link_id"].attrs.update({
+            "long_name": "CML link identifier",
+        })
+
+        # -------------------------
+        # OPTIONAL CRS VARIABLE  <-- RECOMMENDED
+        # -------------------------
+        ds["crs"] = xr.DataArray(
+            0,
+            attrs={
+                "grid_mapping_name": "latitude_longitude",
+                "epsg_code": "EPSG:4326",
+                "semi_major_axis": 6378137.0,
+                "inverse_flattening": 298.257223563,
+                "longitude_of_prime_meridian": 0.0,
+            },
+        )
+
+        ds[var_grid].attrs.update({
+            "units": "mm h-1",
+            "grid_mapping": "crs",
+        })
+        ds[var_point].attrs.update({
+            "units": "mm h-1",
+        })
 
         enc = {
             var_grid: {
