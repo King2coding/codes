@@ -7,10 +7,10 @@ import requests
 import xarray as xr
 
 
-TOKEN = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbl90eXBlIjoiYWNjZXNzIiwiZXhwIjoxNzc0MjM0MDI5LCJpYXQiOjE3NzQxNDc2MjksImp0aSI6ImFjYTYwNWU3MGJlMTQxNDZiNmMyYjgyMTdhNWE0MzE2IiwidXNlcl9pZCI6IjQifQ.__jMFBGnswO444ILB4Nbpqi1UV0LpwoLMXQl_rHMx-0"
-DOWNLOAD_URL = "https://cml.tahmo.org/api/v1/rainfall-maps/dd764a3e-db3a-4305-8362-e2ed3cca668d/download/"
-OUTPUT_PATH = Path("/home/kkumah/Projects/cml-stuff/plots/rainfall_artifact.nc")
-IMAGE_PATH = Path("/home/kkumah/Projects/cml-stuff/plots/rainfall_artifact_preview.png")
+TOKEN = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbl90eXBlIjoiYWNjZXNzIiwiZXhwIjoxNzc0OTYyNzM4LCJpYXQiOjE3NzQ4NzYzMzgsImp0aSI6ImNlODEyYzJkMTdiZDQ0YWNiYzdiMTQwNTIzZjRjZjFlIiwidXNlcl9pZCI6IjQifQ.itaUV0CGB-HsEzbTFFzKhXVfozxY0pa9ifYNEblM2DU"
+DOWNLOAD_URL = "https://cml.tahmo.org/api/v1/rainfall-maps/188e7f4a-2feb-430c-9e27-734f4bb77b93/download/"
+OUTPUT_PATH = Path("/home/kkumah/Projects/cml-stuff/plots/rainfall_artifact_202603300530.nc")
+IMAGE_PATH = Path("/home/kkumah/Projects/cml-stuff/plots/rainfall_artifact_preview_202603300530.png")
 
 
 def download_file():
@@ -123,9 +123,11 @@ if __name__ == "__main__":
 
 
 #%%
+import xarray as xr
+import matplotlib.pyplot as plt
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
-rd_dat = xr.open_dataset('/home/kkumah/Projects/cml-stuff/plots/rainfall_artifact.nc')
+rd_dat = xr.open_dataset('/home/kkumah/Projects/cml-stuff/plots/rainfall_artifact_202603300530.nc')
 
 
 # Create figure with Cartopy projection
@@ -140,18 +142,18 @@ rd_dat['R_mm_per_h'].plot(
     ax=ax,
     transform=ccrs.PlateCarree(),   # IMPORTANT
     cmap='Spectral_r',
-    vmax=3,
+    vmax=15,
     cbar_kwargs={'shrink': 0.7}
 )
 
 # Plot link points
-# ax.scatter(
-#     rd_dat['link_lon'],
-#     rd_dat['link_lat'],
-#     color='black',
-#     s=10,
-#     transform=ccrs.PlateCarree()
-# )
+ax.scatter(
+    rd_dat['link_lon'],
+    rd_dat['link_lat'],
+    color='black',
+    s=10,
+    transform=ccrs.PlateCarree()
+)
 
 # Add country borders and coastlines
 ax.add_feature(cfeature.BORDERS, linewidth=1)
@@ -166,5 +168,5 @@ gl = ax.gridlines(draw_labels=True, linestyle='--', alpha=0.5)
 gl.top_labels = False
 gl.right_labels = False
 
-plt.title("Rainfall Map with CML Links")
+plt.title(f"Rainfall Map with CML Links_{rd_dat['time'].values if 'time' in rd_dat.coords else ''}")
 plt.show()
