@@ -11,6 +11,12 @@ from typing import Tuple, List, Dict
 import os
 import numpy as np
 import pandas as pd
+from datetime import datetime, timezone
+
+import matplotlib.pyplot as plt
+import matplotlib.colors as mcolors
+import cartopy.crs as ccrs
+import cartopy.feature as cfeature
 
 from typing import Optional
 
@@ -21,7 +27,8 @@ import xarray as xr
 
 from joblib import Parallel, delayed, parallel_backend
 from scipy.spatial import cKDTree
-from scipy.ndimage import uniform_filter, binary_opening, generate_binary_structure
+from scipy.ndimage import uniform_filter, binary_opening, generate_binary_structure, distance_transform_edt
+from scipy.ndimage import binary_closing, binary_fill_holes, label
 
 try:
     from pykrige.ok import OrdinaryKriging
@@ -518,8 +525,8 @@ def build_15min_timeseries(df_clean: pd.DataFrame) -> pd.DataFrame:
 # -------------------------------------------------------------------
 def rainlink_strict_Aobs(
     ts_15: pd.DataFrame,
-    wet_thr_db: float = 3.0,
-    win: str = "24H",
+    wet_thr_db: float = 3.0, # 3.0
+    win: str = "48H", # "24H"
     q: float = 0.99,
     min_past_bins: int = 8,
     ffill_limit_bins: int = 32,
@@ -527,7 +534,7 @@ def rainlink_strict_Aobs(
     require_src_present: bool = True,
     # NEW: guard to avoid bad pass-2 baselines
     use_drycount_guard: bool = True,
-    min_dry_bins: int = 8,             # min dry samples required within `win` to accept base2
+    min_dry_bins: int = 8,             # 8 min dry samples required within `win` to accept base2
     dry_mask_source: str = "wet1",     # "wet1" (from pass-1) or "wet_final" (from final Aobs)
     guard_behavior: str = "fallback",  # "fallback" -> use base1, "zero" -> force Aobs=0 when unreliable
 ) -> pd.DataFrame:
@@ -794,6 +801,34 @@ def _smooth_in_mask(Z, mask, kernel_px: int = 3) -> np.ndarray:
     return np.where(mask, Zs, np.nan)
 
 
+#-------------------------------------------------------------------
+
+def _clean_support_mask(mask, closing_iters=1, fill_holes=True, max_hole_px=25):
+    """
+    Light cleanup of support mask:
+    - binary closing to connect tiny gaps
+    - optional filling of only small interior holes
+    """
+    m = np.asarray(mask, dtype=bool)
+
+    if closing_iters and closing_iters > 0:
+        m = binary_closing(m, iterations=int(closing_iters))
+
+    if fill_holes:
+        filled = binary_fill_holes(m)
+        holes = filled & (~m)
+
+        if holes.any():
+            lab, nlab = label(holes)
+            keep = np.zeros_like(m, dtype=bool)
+            for i in range(1, nlab + 1):
+                region = (lab == i)
+                if region.sum() <= int(max_hole_px):
+                    keep |= region
+            m = m | keep
+
+    return m
+
 # ---------------- interpolators ----------------
 def _idw_on_grid_km_weighted(
     xkm, ykm, z, Xkm, Ykm, nnear, power, maxdist_km, w_pts=None, workers: int | None = None
@@ -860,6 +895,159 @@ def _try_ok_on_grid_km(
     zhat, _ = ok.execute("grid", xvec, yvec)
     return np.asarray(zhat, float)
 
+#-------------------------------------------------------------------
+def _edge_taper_from_mask(
+    support_mask,
+    *,
+    taper_pixels: int = 4,
+    min_edge_weight: float = 0.15,
+):
+
+    """
+    Build a smooth edge-taper weight inside a binary support mask.
+    Parameters
+    ----------
+    support_mask : 2D bool array
+        True where CML support exists.
+    taper_pixels : int
+        Number of grid pixels over which rainfall ramps up from the edge
+        toward the interior. With grid_res_deg=0.03, 4 pixels is roughly
+        ~12 km north-south.
+    min_edge_weight : float
+        Minimum multiplier at the support-mask boundary. Use 0.0 for full
+        decay to zero at the edge, or 0.10-0.25 to avoid over-suppressing
+        edge rainfall.
+    Returns
+    -------
+    taper : 2D float array
+        Values in [0, 1]. Outside support is 0. Interior approaches 1.
+    """
+    m = np.asarray(support_mask, dtype=bool)
+    if not np.any(m):
+        return np.zeros_like(m, dtype=float)
+    if taper_pixels is None or int(taper_pixels) <= 0:
+        return m.astype(float)
+    # distance_transform_edt gives distance from each True pixel
+    # to the nearest False pixel, in pixel units.
+    dist_inside = distance_transform_edt(m)
+    taper = np.clip(dist_inside / float(taper_pixels), 0.0, 1.0)
+    # keep a small value at the mask edge instead of dropping too harshly
+    taper = min_edge_weight + (1.0 - min_edge_weight) * taper
+    taper = np.where(m, taper, 0.0)
+    return taper
+#---------------- cosmetic smoothing for display ----------------
+def _cosmetic_smooth_rain_for_display(
+
+    Z,
+    support_mask,
+    *,
+    kernel_px: int = 2,
+    fill_holes: bool = False,
+    drizzle_to_zero: float | None = 0.10,
+    # NEW: edge taper controls
+    apply_edge_taper: bool = True,
+    edge_taper_pixels: int = 4,
+    edge_taper_min_weight: float = 0.15,
+):
+
+    """
+    Cosmetic/display-only smoothing for rainfall maps.
+    IMPORTANT:
+    - This should NOT replace the scientific rainfall field.
+    - It is only meant to reduce harsh circular/blocky visual artifacts.
+    - Smoothing is restricted to the support mask.
+    - Outside support remains NaN.
+    - Optional edge taper softens the hard cliff at support-mask boundaries.
+    Parameters
+    ----------
+    Z : 2D array
+        Scientific rainfall field.
+    support_mask : 2D bool array
+        Valid CML support mask.
+    kernel_px : int
+        Box smoothing kernel size in pixels.
+    fill_holes : bool
+        If True, smoothed values can fill supported NaN holes.
+        If False, only existing finite rainfall pixels are smoothed.
+    drizzle_to_zero : float or None
+        Small finite values below this threshold are set to 0.
+    apply_edge_taper : bool
+        Whether to taper display rainfall near support-mask edges.
+    edge_taper_pixels : int
+        Width of taper zone in pixels.
+    edge_taper_min_weight : float
+        Minimum edge multiplier inside support.
+    Returns
+    -------
+    Z_display : 2D array
+        Cosmetic rainfall field for plotting/display only.
+    """
+
+    Z = np.asarray(Z, dtype=float)
+    support_mask = np.asarray(support_mask, dtype=bool)
+    if kernel_px is None or int(kernel_px) <= 1:
+        Z_display = Z.copy()
+    else:
+        Zs = _smooth_normalized(
+            Z,
+            write_mask=support_mask,
+            kernel_px=int(kernel_px),
+        )
+
+        if fill_holes:
+            Z_display = np.where(support_mask, Zs, np.nan)
+        else:
+            Z_display = np.where(support_mask & np.isfinite(Z), Zs, np.nan)
+
+    # NEW: soften hard support-mask edges for display only
+    if apply_edge_taper:
+        taper = _edge_taper_from_mask(
+            support_mask,
+            taper_pixels=int(edge_taper_pixels),
+            min_edge_weight=float(edge_taper_min_weight),
+        )
+
+        Z_display = np.where(
+            support_mask & np.isfinite(Z_display),
+            Z_display * taper,
+            np.nan,
+        )
+    if drizzle_to_zero is not None:
+        Z_display = np.where(
+            np.isfinite(Z_display) & (Z_display < float(drizzle_to_zero)),
+            0.0,
+            Z_display,
+        )
+    return Z_display
+
+#----------------- coverage_quality_from_confidence ----------------
+def _coverage_quality_from_confidence(
+    confidence,
+    support_mask=None,
+    *,
+    med_thr: float = 0.50,
+    high_thr: float = 0.75,
+):
+    """
+    Classes:
+      0 = unsupported
+      1 = low confidence
+      2 = moderate confidence
+      3 = high confidence
+    """
+    conf = np.asarray(confidence, dtype=float)
+
+    if support_mask is None:
+        mask = np.isfinite(conf) & (conf > 0)
+    else:
+        mask = np.asarray(support_mask, dtype=bool)
+
+    q = np.zeros(conf.shape, dtype=np.int8)
+    q[mask & (conf > 0)] = 1
+    q[mask & (conf >= med_thr)] = 2
+    q[mask & (conf >= high_thr)] = 3
+
+    return q
 
 # ---------------- main API (OK-gated + IDW fallback) ----------------
 def grid_rain_15min(
@@ -1128,6 +1316,172 @@ def _grid_from_meta(meta_xy, grid_res_deg=0.03, pad_deg=0.20):
     lon, lat = np.meshgrid(xv, yv)
     return lon, lat, xv, yv
 
+#-------------------------------------------------------------------
+def _haversine_distance_km(lon1, lat1, lon2, lat2):
+    """
+    Great-circle distance between lon/lat points in km.
+    Inputs can be scalars or arrays.
+    """
+    lon1 = np.asarray(lon1, dtype=float)
+    lat1 = np.asarray(lat1, dtype=float)
+    lon2 = np.asarray(lon2, dtype=float)
+    lat2 = np.asarray(lat2, dtype=float)
+
+    rlon1 = np.deg2rad(lon1)
+    rlat1 = np.deg2rad(lat1)
+    rlon2 = np.deg2rad(lon2)
+    rlat2 = np.deg2rad(lat2)
+
+    dlon = rlon2 - rlon1
+    dlat = rlat2 - rlat1
+
+    a = (
+        np.sin(dlat / 2.0) ** 2
+        + np.cos(rlat1) * np.cos(rlat2) * np.sin(dlon / 2.0) ** 2
+    )
+    c = 2.0 * np.arcsin(np.sqrt(np.clip(a, 0.0, 1.0)))
+    return _EARTH_R_KM * c
+
+#-------------------------------------------------------------------
+
+def _n_support_points_from_length(
+    length_km,
+    *,
+    spacing_km=2.0,
+    min_points=3,
+    max_points=7,
+):
+    """
+    Choose number of along-link support points from link length.
+
+    Examples with defaults:
+      length 1 km  -> 3 points
+      length 8 km  -> 5 points
+      length 15 km -> 7 points
+
+    The returned points include start and end.
+    """
+    if not np.isfinite(length_km) or length_km <= 0:
+        return int(min_points)
+
+    n = int(np.ceil(float(length_km) / float(spacing_km))) + 1
+    n = max(int(min_points), n)
+    n = min(int(max_points), n)
+    return int(n)
+
+#-------------------------------------------------------------------
+def _expand_links_to_path_support_points(
+    pts,
+    *,
+    support_geometry="link_path",
+    n_support_points_per_link=5,
+    support_point_spacing_km=2.0,
+    min_support_points_per_link=3,
+    max_support_points_per_link=7,
+    use_length_conditioned_points=True,
+):
+    """
+    Expand link observations into geometry support points.
+
+    Parameters
+    ----------
+    pts : pd.DataFrame
+        Must contain:
+          ID, R_mm_per_h, XStart, YStart, XEnd, YEnd, lon_mid, lat_mid
+
+    support_geometry : {"midpoint", "start_mid_end", "link_path"}
+        midpoint:
+            One support point per link at midpoint.
+        start_mid_end:
+            Three support points per link: start, midpoint, end.
+        link_path:
+            Multiple support points along the link path.
+
+    Returns
+    -------
+    out : pd.DataFrame
+        Columns:
+          ID, R_mm_per_h, lon_support, lat_support, support_frac
+
+    Notes
+    -----
+    All support points from the same link carry the same R_mm_per_h.
+    This does not imply rainfall varies along the link; it only improves support geometry.
+    """
+    if support_geometry not in ("midpoint", "start_mid_end", "link_path"):
+        raise ValueError(
+            "support_geometry must be one of: 'midpoint', 'start_mid_end', 'link_path'"
+        )
+
+    rows = []
+
+    for _, row in pts.iterrows():
+        lid = str(row["ID"])
+        r = pd.to_numeric(row["R_mm_per_h"], errors="coerce")
+
+        x0 = pd.to_numeric(row["XStart"], errors="coerce")
+        y0 = pd.to_numeric(row["YStart"], errors="coerce")
+        x1 = pd.to_numeric(row["XEnd"], errors="coerce")
+        y1 = pd.to_numeric(row["YEnd"], errors="coerce")
+        xm = pd.to_numeric(row["lon_mid"], errors="coerce")
+        ym = pd.to_numeric(row["lat_mid"], errors="coerce")
+
+        if not (
+            np.isfinite(r)
+            and np.isfinite(x0)
+            and np.isfinite(y0)
+            and np.isfinite(x1)
+            and np.isfinite(y1)
+            and np.isfinite(xm)
+            and np.isfinite(ym)
+        ):
+            continue
+
+        if support_geometry == "midpoint":
+            fracs = np.array([0.5], dtype=float)
+
+        elif support_geometry == "start_mid_end":
+            fracs = np.array([0.0, 0.5, 1.0], dtype=float)
+
+        else:
+            # support_geometry == "link_path"
+            if use_length_conditioned_points:
+                L_km = _haversine_distance_km(x0, y0, x1, y1)
+                npts = _n_support_points_from_length(
+                    L_km,
+                    spacing_km=support_point_spacing_km,
+                    min_points=min_support_points_per_link,
+                    max_points=max_support_points_per_link,
+                )
+            else:
+                npts = int(n_support_points_per_link)
+                npts = max(2, npts)
+
+            fracs = np.linspace(0.0, 1.0, int(npts))
+
+        for f in fracs:
+            lon_s = x0 + float(f) * (x1 - x0)
+            lat_s = y0 + float(f) * (y1 - y0)
+
+            rows.append(
+                {
+                    "ID": lid,
+                    "R_mm_per_h": float(r),
+                    "lon_support": float(lon_s),
+                    "lat_support": float(lat_s),
+                    "support_frac": float(f),
+                }
+            )
+
+    if not rows:
+        return pd.DataFrame(
+            columns=["ID", "R_mm_per_h", "lon_support", "lat_support", "support_frac"]
+        )
+
+    return pd.DataFrame(rows)
+
+#-------------------------------------------------------------------
+
 def _support_mask_wet_haversine(lon_grid, lat_grid, lon_wet, lat_wet, k=2, radius_km=25.0):
     """True where the k-th nearest WET link is within radius_km (haversine)."""
     if not _SKLEARN_AVAILABLE or len(lon_wet) < k:
@@ -1199,7 +1553,72 @@ def _support_mask_wet_dry_haversine(
     mask = wet_mask & (~dry_suppression)
     return mask
 #-------------------------------------------------------------------
+def _support_confidence_from_wet_dry_v2(
+    lon_grid,
+    lat_grid,
+    lon_wet,
+    lat_wet,
+    lon_dry,
+    lat_dry,
+    *,
+    wet_k=2,
+    wet_radius_km=25.0,
+    dry_radius_km=12.0,
+    dry_penalty_weight=0.50,
+    conf_power=1.2,
+):
+    """
+    Support/confidence field in [0, 1].
 
+    Logic:
+    - Wet confidence is based on distance to the k-th nearest wet support point.
+      This rewards local wet-link/path clustering, not just a single point.
+    - Dry links gently reduce confidence where they are very close.
+    - This is a support/geometry indicator, not formal uncertainty.
+    """
+    wet_d = _kth_distance_km_haversine(
+        lon_grid,
+        lat_grid,
+        lon_wet,
+        lat_wet,
+        k=max(1, int(wet_k)),
+    )
+
+    wet_score = np.clip(
+        1.0 - wet_d / max(float(wet_radius_km), 1e-6),
+        0.0,
+        1.0,
+    )
+
+    if len(lon_dry) == 0:
+        conf = wet_score
+    else:
+        dry_d = _kth_distance_km_haversine(
+            lon_grid,
+            lat_grid,
+            lon_dry,
+            lat_dry,
+            k=1,
+        )
+
+        dry_score = np.clip(
+            1.0 - dry_d / max(float(dry_radius_km), 1e-6),
+            0.0,
+            1.0,
+        )
+
+        dry_factor = 1.0 - float(dry_penalty_weight) * dry_score
+        dry_factor = np.clip(dry_factor, 0.0, 1.0)
+
+        conf = wet_score * dry_factor
+
+    conf = np.clip(conf, 0.0, 1.0)
+
+    if conf_power is not None:
+        conf = conf ** float(conf_power)
+
+    return conf
+#-------------------------------------------------------------------
 
 def _support_confidence_from_wet_dry(
     lon_grid, lat_grid,
@@ -1229,6 +1648,7 @@ def _support_confidence_from_wet_dry(
 
 def _estimate_variogram_params(values, range_km=25.0, nugget_frac=0.4):
     """Simple robust parameters; sill from variance of training values."""
+    # range_km=25.0
     v = np.asarray(values, float)
     v = v[np.isfinite(v)]
     sill = float(np.nanvar(v)) if v.size else 1e-6
@@ -1586,12 +2006,6 @@ def save_each_time_to_netcdf(
 
     return out_paths
 
-import os
-import numpy as np
-import pandas as pd
-import xarray as xr
-from datetime import datetime, timezone
-
 def save_daily_grid_and_points_netcdf(
     R_da_day: xr.DataArray,          # (time, lat, lon) for one day
     df_s5_day: pd.DataFrame,         # time-indexed; cols: ID, R_mm_per_h
@@ -1797,11 +2211,6 @@ def save_daily_grid_and_points_netcdf(
     ds.to_netcdf(fn, engine=engine, encoding=enc, unlimited_dims={"time"})
     return fn
 
-import os
-import numpy as np
-import pandas as pd
-import xarray as xr
-from datetime import datetime, timezone
 
 def _grid_from_meta_or_fixed(
     meta_xy,
@@ -1840,40 +2249,142 @@ def grid_rain_15min_rainlink_ok_full_ghana(
     grid_res_deg=0.03,
     domain_pad_deg=0.20,
     fixed_extent=(-3.5, 1.5, 4.5, 11.5),   # Ghana AOI: lon_min, lon_max, lat_min, lat_max
+
+    # wet/dry classification
     wet_thr=0.8,
     dry_thr=0.05,
+
+    # OK / variogram
     ok_model="exponential",
     ok_range_km=25.0,
     ok_nugget_frac=0.4,
     min_pts_ok=12,
+
+    # support mask
     support_k=2,
     support_radius_km=20.0,
     dry_radius_km=10.0,
+
+    # NEW: support/confidence geometry
+    support_geometry: str = "link_path",             # "midpoint" | "start_mid_end" | "link_path"
+    n_support_points_per_link: int = 5,
+    support_point_spacing_km: float = 2.0,
+    min_support_points_per_link: int = 3,
+    max_support_points_per_link: int = 7,
+    use_length_conditioned_support_points: bool = True,
+
+    # support/confidence controls
     use_dry_constraint=True,
     use_soft_confidence=True,
     confidence_floor=0.15,
     confidence_power=1.5,
+    confidence_dry_penalty_weight=0.50,
+
+    # rainfall handling
     drizzle_to_zero=0.10,
     times_sel=None,
     n_jobs: int = 1,
     parallel_backend_name: str = "processes",
     outside_support_fill=np.nan,
     insufficient_training_fill=np.nan,
+
+    # scientific-field smoothing controls
     smooth_kernel_px: int | None = 1,
-    smooth_fill_holes: bool = True,
+    smooth_fill_holes: bool = False,
+
+    # support mask cleanup controls
+    clean_support: bool = True,
+    support_closing_iters: int = 1,
+    support_fill_holes: bool = True,
+    support_max_hole_px: int = 20,
+
+    # display/cosmetic layer controls
+    make_display_field: bool = True,
+    display_smooth_kernel_px: int | None = 2,
+    display_smooth_fill_holes: bool = False,
+
+    # display edge taper controls
+    apply_display_edge_taper: bool = True,
+    display_edge_taper_pixels: int = 4,
+    display_edge_taper_min_weight: float = 0.15,
+
+    # coverage quality controls
+    make_coverage_quality: bool = True,
+    coverage_quality_med_thr: float = 0.50,
+    coverage_quality_high_thr: float = 0.75,
+
+    # return type
+    return_dataset: bool = True,
 ):
     """
-    Same logic as grid_rain_15min_rainlink_ok, but writes output on a fixed Ghana-wide grid.
+    RainLINK-like OK gridding on a fixed Ghana-wide grid, with optional
+    link-path support geometry and support/confidence outputs.
 
-    Important:
-    - The map extent is fixed countrywide.
-    - Unsupported areas remain NaN by default.
-    - This changes only the output grid extent, not the rainfall-retrieval physics.
+    Returns
+    -------
+    If return_dataset=True:
+        ds : xr.Dataset
+            Contains:
+              - R_mm_per_h(time, lat, lon)
+              - R_display_mm_per_h(time, lat, lon)
+              - cml_support_confidence(time, lat, lon)
+              - cml_support_mask(time, lat, lon)
+              - cml_coverage_quality(time, lat, lon)
+        diag : dict
+
+    If return_dataset=False:
+        R_da : xr.DataArray
+            Scientific rainfall field only, for backward compatibility.
+        diag : dict
+
+    Notes
+    -----
+    R_mm_per_h:
+        Scientific gridded rainfall field.
+
+    R_display_mm_per_h:
+        Cosmetic/display-only rainfall field. Use for map visualization,
+        not scientific validation or quantitative blending.
+
+    cml_support_confidence:
+        Practical support/confidence indicator in [0, 1], based on local
+        CML network geometry and wet/dry consistency. This is not a formal
+        probabilistic uncertainty estimate.
+
+    cml_support_mask:
+        Binary supported/unsupported CML rainfall mask.
+
+    cml_coverage_quality:
+        Categorical support/coverage quality layer derived from confidence
+        and support mask. This is intended to help downstream users decide
+        how strongly to use or blend the CML rainfall product.
+
+    support_geometry:
+        "midpoint":
+            support/confidence uses one point per CML link, at midpoint.
+        "start_mid_end":
+            support/confidence uses start, midpoint, and end of each link.
+        "link_path":
+            support/confidence uses several points along each link path.
+
+    Important implementation choice:
+        OK training remains based on link midpoints only.
+        Along-link points are used only for support/confidence geometry.
+        This avoids artificially duplicating rainfall values from long links
+        in the kriging training.
     """
+
     if not _PYKRIGE_AVAILABLE:
         raise RuntimeError("PyKrige not available for RainLINK-style gridding.")
 
-    # 1) fixed Ghana grid instead of dynamic link footprint
+    if support_geometry not in ("midpoint", "start_mid_end", "link_path"):
+        raise ValueError(
+            "support_geometry must be one of: 'midpoint', 'start_mid_end', 'link_path'"
+        )
+
+    # ------------------------------------------------------------
+    # 1) fixed Ghana grid
+    # ------------------------------------------------------------
     LON, LAT, xv, yv = _grid_from_meta_or_fixed(
         df_meta_for_xy,
         grid_res_deg=grid_res_deg,
@@ -1881,70 +2392,238 @@ def grid_rain_15min_rainlink_ok_full_ghana(
         fixed_extent=fixed_extent,
     )
 
-    # 2) outputs
+    ny, nx = LAT.shape
+
+    # ------------------------------------------------------------
+    # 2) time axis
+    # ------------------------------------------------------------
     all_times = pd.Index(sorted(df_s5.index.unique()))
-    times = all_times if times_sel is None else pd.Index(pd.to_datetime(times_sel))
-    out = np.full((len(times), LAT.shape[0], LAT.shape[1]), np.nan, float)
 
-    # precompute midpoints by ID
-    mid = _midpoints(df_meta_for_xy[["ID", "XStart", "YStart", "XEnd", "YEnd"]].drop_duplicates("ID"))
-    id2xy = mid.set_index("ID")[["lon_mid", "lat_mid"]]
+    if times_sel is None:
+        times = all_times
+    else:
+        times_raw = pd.Index(pd.to_datetime(times_sel))
+        fixed_times = []
 
-    # diagnostics
+        for tt in times_raw:
+            tt = pd.Timestamp(tt)
+            if tt.tzinfo is not None:
+                tt = tt.tz_convert("UTC").tz_localize(None)
+            else:
+                tt = tt.tz_localize(None)
+            fixed_times.append(tt)
+
+        times = pd.Index(fixed_times)
+
+    # ------------------------------------------------------------
+    # 3) output arrays
+    # ------------------------------------------------------------
+    rain_out = np.full((len(times), ny, nx), np.nan, dtype=float)
+    display_out = np.full((len(times), ny, nx), np.nan, dtype=float)
+    conf_out = np.full((len(times), ny, nx), 0.0, dtype=float)
+    mask_out = np.zeros((len(times), ny, nx), dtype=np.int8)
+
+    # NEW: categorical coverage/support quality output
+    coverage_quality_out = np.zeros((len(times), ny, nx), dtype=np.int8)
+
+    # ------------------------------------------------------------
+    # 4) precompute link geometry
+    # ------------------------------------------------------------
+    mid = _midpoints(
+        df_meta_for_xy[["ID", "XStart", "YStart", "XEnd", "YEnd"]]
+        .drop_duplicates("ID")
+        .copy()
+    )
+
+    # Keep full geometry because link-path support needs start/end points.
+    id2geom = mid.set_index("ID")[["XStart", "YStart", "XEnd", "YEnd", "lon_mid", "lat_mid"]]
+
+    # ------------------------------------------------------------
+    # 5) diagnostics container
+    # ------------------------------------------------------------
     diag = {
         "counts": {"ok": 0, "failed_or_skipped": 0},
         "wet_counts": [],
+        "dry_counts": [],
         "train_counts": [],
+        "support_point_counts": [],
+        "supported_pixel_counts": [],
+        "mean_confidence_supported": [],
+        "max_confidence": [],
+        "coverage_quality_counts": [],
         "fixed_extent": {
             "lon_min": float(fixed_extent[0]),
             "lon_max": float(fixed_extent[1]),
             "lat_min": float(fixed_extent[2]),
             "lat_max": float(fixed_extent[3]),
         },
-        "grid_shape": (int(LAT.shape[0]), int(LAT.shape[1])),
+        "grid_shape": (int(ny), int(nx)),
         "grid_res_deg": float(grid_res_deg),
-        "dry_counts": [],
+        "config": {
+            "wet_thr": float(wet_thr),
+            "dry_thr": float(dry_thr),
+            "ok_model": ok_model,
+            "ok_range_km": float(ok_range_km),
+            "ok_nugget_frac": float(ok_nugget_frac),
+            "min_pts_ok": int(min_pts_ok),
+
+            "support_k": int(support_k),
+            "support_radius_km": float(support_radius_km),
+            "dry_radius_km": float(dry_radius_km),
+
+            "support_geometry": support_geometry,
+            "n_support_points_per_link": int(n_support_points_per_link),
+            "support_point_spacing_km": float(support_point_spacing_km),
+            "min_support_points_per_link": int(min_support_points_per_link),
+            "max_support_points_per_link": int(max_support_points_per_link),
+            "use_length_conditioned_support_points": bool(use_length_conditioned_support_points),
+
+            "use_dry_constraint": bool(use_dry_constraint),
+            "use_soft_confidence": bool(use_soft_confidence),
+            "confidence_floor": float(confidence_floor),
+            "confidence_power": float(confidence_power),
+            "confidence_dry_penalty_weight": float(confidence_dry_penalty_weight),
+
+            "drizzle_to_zero": drizzle_to_zero,
+            "outside_support_fill": outside_support_fill,
+            "insufficient_training_fill": insufficient_training_fill,
+
+            "smooth_kernel_px": smooth_kernel_px,
+            "smooth_fill_holes": bool(smooth_fill_holes),
+
+            "clean_support": bool(clean_support),
+            "support_closing_iters": int(support_closing_iters),
+            "support_fill_holes": bool(support_fill_holes),
+            "support_max_hole_px": int(support_max_hole_px),
+
+            "make_display_field": bool(make_display_field),
+            "display_smooth_kernel_px": display_smooth_kernel_px,
+            "display_smooth_fill_holes": bool(display_smooth_fill_holes),
+
+            # NEW: display-only edge taper settings
+            "apply_display_edge_taper": bool(apply_display_edge_taper),
+            "display_edge_taper_pixels": int(display_edge_taper_pixels),
+            "display_edge_taper_min_weight": float(display_edge_taper_min_weight),
+
+            # NEW: categorical coverage quality settings
+            "make_coverage_quality": bool(make_coverage_quality),
+            "coverage_quality_med_thr": float(coverage_quality_med_thr),
+            "coverage_quality_high_thr": float(coverage_quality_high_thr),
+        },
     }
 
+    # ------------------------------------------------------------
+    # 6) per-time gridding worker
+    # ------------------------------------------------------------
     def _do_one(it, t):
-        # slice points and attach coords
+        # default outputs for failed/no-info cases
+        Z_fail = np.full_like(LON, insufficient_training_fill, dtype=float)
+        M_fail = np.zeros_like(LON, dtype=bool)
+        C_fail = np.zeros_like(LON, dtype=float)
+        D_fail = np.full_like(LON, np.nan, dtype=float)
+        Q_fail = np.zeros_like(LON, dtype=np.int8)
+
+        # --------------------------------------------------------
+        # A) slice points and attach geometry
+        # --------------------------------------------------------
         try:
-            pts = df_s5.loc[t].merge(id2xy, on="ID", how="inner")
+            pts_raw = df_s5.loc[t]
         except KeyError:
-            Z = np.full_like(LON, insufficient_training_fill, float)
-            return it, Z, 0, 0, 0, False
+            return it, Z_fail, D_fail, C_fail, M_fail, Q_fail, 0, 0, 0, 0, False
 
-        vals = pd.to_numeric(pts["R_mm_per_h"], errors="coerce").values
-        lon = pd.to_numeric(pts["lon_mid"], errors="coerce").values
-        lat = pd.to_numeric(pts["lat_mid"], errors="coerce").values
+        if isinstance(pts_raw, pd.Series):
+            pts_raw = pts_raw.to_frame().T
 
-        good = np.isfinite(vals) & np.isfinite(lon) & np.isfinite(lat)
-        if not good.any():
-            Z = np.full_like(LON, insufficient_training_fill, float)
-            return it, Z, 0, 0, 0, False
+        pts = pts_raw.merge(id2geom, on="ID", how="inner")
 
-        vals, lon, lat = vals[good], lon[good], lat[good]
+        if pts.empty:
+            return it, Z_fail, D_fail, C_fail, M_fail, Q_fail, 0, 0, 0, 0, False
 
-        # classify wet/dry for training
-        wet = vals >= float(wet_thr)
-        dry = vals <= float(dry_thr)
+        # --------------------------------------------------------
+        # B) midpoint observations for OK training
+        # --------------------------------------------------------
+        vals_mid = pd.to_numeric(pts["R_mm_per_h"], errors="coerce").to_numpy(float)
+        lon_mid = pd.to_numeric(pts["lon_mid"], errors="coerce").to_numpy(float)
+        lat_mid = pd.to_numeric(pts["lat_mid"], errors="coerce").to_numpy(float)
 
-        lon_wet, lat_wet = lon[wet], lat[wet]
-        lon_dry, lat_dry = lon[dry], lat[dry]
+        good_mid = np.isfinite(vals_mid) & np.isfinite(lon_mid) & np.isfinite(lat_mid)
 
-        if np.count_nonzero(wet) < 2:
-            Z = np.full_like(LON, insufficient_training_fill, float)
-            return it, Z, int(wet.sum()), int(dry.sum()), 0, False
+        if not good_mid.any():
+            return it, Z_fail, D_fail, C_fail, M_fail, Q_fail, 0, 0, 0, 0, False
 
-        # training set = wet values + dry zeros
-        lon_tr = np.concatenate([lon[wet], lon[dry]])
-        lat_tr = np.concatenate([lat[wet], lat[dry]])
-        val_tr = np.concatenate([vals[wet], np.zeros(np.count_nonzero(dry), float)])
+        pts_good = pts.loc[good_mid].copy()
 
-        if len(val_tr) < max(3, int(min_pts_ok)):
-            Z = np.full_like(LON, insufficient_training_fill, float)
-            return it, Z, int(wet.sum()), int(dry.sum()), int(len(val_tr)), False
+        vals_mid = vals_mid[good_mid]
+        lon_mid = lon_mid[good_mid]
+        lat_mid = lat_mid[good_mid]
 
+        # Wet/dry classification at link/midpoint level.
+        wet_mid = vals_mid >= float(wet_thr)
+        dry_mid = vals_mid <= float(dry_thr)
+
+        nwet = int(np.count_nonzero(wet_mid))
+        ndry = int(np.count_nonzero(dry_mid))
+
+        if nwet < 2:
+            return it, Z_fail, D_fail, C_fail, M_fail, Q_fail, nwet, ndry, 0, 0, False
+
+        # --------------------------------------------------------
+        # C) expanded along-link support points
+        # --------------------------------------------------------
+        support_pts = _expand_links_to_path_support_points(
+            pts_good,
+            support_geometry=support_geometry,
+            n_support_points_per_link=n_support_points_per_link,
+            support_point_spacing_km=support_point_spacing_km,
+            min_support_points_per_link=min_support_points_per_link,
+            max_support_points_per_link=max_support_points_per_link,
+            use_length_conditioned_points=use_length_conditioned_support_points,
+        )
+
+        if support_pts.empty:
+            return it, Z_fail, D_fail, C_fail, M_fail, Q_fail, nwet, ndry, 0, 0, False
+
+        svals = pd.to_numeric(support_pts["R_mm_per_h"], errors="coerce").to_numpy(float)
+        slon = pd.to_numeric(support_pts["lon_support"], errors="coerce").to_numpy(float)
+        slat = pd.to_numeric(support_pts["lat_support"], errors="coerce").to_numpy(float)
+
+        good_s = np.isfinite(svals) & np.isfinite(slon) & np.isfinite(slat)
+
+        svals = svals[good_s]
+        slon = slon[good_s]
+        slat = slat[good_s]
+
+        if svals.size == 0:
+            return it, Z_fail, D_fail, C_fail, M_fail, Q_fail, nwet, ndry, 0, 0, False
+
+        wet_s = svals >= float(wet_thr)
+        dry_s = svals <= float(dry_thr)
+
+        lon_wet, lat_wet = slon[wet_s], slat[wet_s]
+        lon_dry, lat_dry = slon[dry_s], slat[dry_s]
+
+        nsupport = int(len(svals))
+
+        # --------------------------------------------------------
+        # D) OK training set
+        # --------------------------------------------------------
+        # Keep OK training at link midpoint level.
+        # Along-link points are used only for support/confidence geometry.
+        lon_tr = np.concatenate([lon_mid[wet_mid], lon_mid[dry_mid]])
+        lat_tr = np.concatenate([lat_mid[wet_mid], lat_mid[dry_mid]])
+        val_tr = np.concatenate([
+            vals_mid[wet_mid],
+            np.zeros(np.count_nonzero(dry_mid), dtype=float),
+        ])
+
+        ntrain = int(len(val_tr))
+
+        if ntrain < max(3, int(min_pts_ok)):
+            return it, Z_fail, D_fail, C_fail, M_fail, Q_fail, nwet, ndry, ntrain, nsupport, False
+
+        # --------------------------------------------------------
+        # E) Ordinary Kriging
+        # --------------------------------------------------------
         vparam = _estimate_variogram_params(
             val_tr,
             range_km=ok_range_km,
@@ -1962,15 +2641,21 @@ def grid_rain_15min_rainlink_ok_full_ghana(
                 enable_plotting=False,
                 verbose=False,
             )
-            Z, _ = OK.execute("grid", xv, yv)
-            Z = np.asarray(Z, float)
 
-            # support mask: wet support constrained by nearby dry links
+            Z, _ = OK.execute("grid", xv, yv)
+            Z = np.asarray(Z, dtype=float)
+
+            # ----------------------------------------------------
+            # F) support mask from link-path support points
+            # ----------------------------------------------------
             if use_dry_constraint:
                 mask = _support_mask_wet_dry_haversine(
-                    LON, LAT,
-                    lon_wet, lat_wet,
-                    lon_dry, lat_dry,
+                    LON,
+                    LAT,
+                    lon_wet,
+                    lat_wet,
+                    lon_dry,
+                    lat_dry,
                     wet_k=int(support_k),
                     wet_radius_km=float(support_radius_km),
                     dry_radius_km=float(dry_radius_km),
@@ -1979,87 +2664,354 @@ def grid_rain_15min_rainlink_ok_full_ghana(
             else:
                 if _SKLEARN_AVAILABLE and len(lon_wet) >= max(1, int(support_k)):
                     mask = _support_mask_wet_haversine(
-                        LON, LAT,
-                        lon_wet, lat_wet,
+                        LON,
+                        LAT,
+                        lon_wet,
+                        lat_wet,
                         k=int(support_k),
                         radius_km=float(support_radius_km),
                     )
                 else:
                     mask = _nearest_distance_mask(
-                        xv, yv,
-                        lon_wet, lat_wet,
+                        xv,
+                        yv,
+                        lon_wet,
+                        lat_wet,
                         max_dist_km=support_radius_km,
                         workers=1,
                     )
 
-            # outside support -> NaN by default
+            mask = np.asarray(mask, dtype=bool)
+
+            if clean_support and np.any(mask):
+                mask = _clean_support_mask(
+                    mask,
+                    closing_iters=int(support_closing_iters),
+                    fill_holes=bool(support_fill_holes),
+                    max_hole_px=int(support_max_hole_px),
+                )
+
+            # ----------------------------------------------------
+            # G) confidence/support layer from link-path support points
+            # ----------------------------------------------------
+            if use_soft_confidence and np.any(mask) and len(lon_wet) > 0:
+                conf = _support_confidence_from_wet_dry_v2(
+                    LON,
+                    LAT,
+                    lon_wet,
+                    lat_wet,
+                    lon_dry,
+                    lat_dry,
+                    wet_k=int(support_k),
+                    wet_radius_km=float(support_radius_km),
+                    dry_radius_km=float(dry_radius_km),
+                    dry_penalty_weight=float(confidence_dry_penalty_weight),
+                    conf_power=float(confidence_power),
+                )
+
+                conf = np.where(mask, conf, 0.0)
+
+                # Apply confidence floor only inside support.
+                conf = np.where(
+                    mask,
+                    np.clip(conf, float(confidence_floor), 1.0),
+                    0.0,
+                )
+            else:
+                conf = np.where(mask, 1.0, 0.0)
+
+            # ----------------------------------------------------
+            # H) scientific rainfall field
+            # ----------------------------------------------------
             if np.isnan(outside_support_fill):
                 Z = np.where(mask, Z, np.nan)
             else:
                 Z = np.where(mask, Z, float(outside_support_fill))
 
-            # optional soft confidence taper inside supported area
-            if use_soft_confidence and np.any(mask) and len(lon_wet) > 0:
-                conf = _support_confidence_from_wet_dry(
-                    LON, LAT,
-                    lon_wet, lat_wet,
-                    lon_dry, lat_dry,
-                    wet_radius_km=float(support_radius_km),
-                    dry_radius_km=float(dry_radius_km),
-                    conf_power=float(confidence_power),
+            # Soft taper scientific rainfall by confidence.
+            # This reduces weak-support pixels without abruptly deleting them.
+            if use_soft_confidence:
+                Z = np.where(np.isfinite(Z) & mask, Z * conf, Z)
+
+            # Optional smoothing of scientific field.
+            # Recommendation: keep this low/disabled for scientific output.
+            if smooth_kernel_px is not None and int(smooth_kernel_px) > 1:
+                Zs = _smooth_normalized(
+                    Z,
+                    write_mask=mask,
+                    kernel_px=int(smooth_kernel_px),
                 )
 
-                conf = np.where(mask, conf, 0.0)
-                conf = np.where(conf >= float(confidence_floor), conf, 0.0)
-
-                # taper rainfall toward weak-support edges
-                Z = np.where(np.isfinite(Z), Z * conf, Z)
-
-            # optional smoothing inside strict support
-            if smooth_kernel_px is not None and int(smooth_kernel_px) > 1:
                 if smooth_fill_holes:
-                    Zs = _smooth_normalized(Z, write_mask=mask, kernel_px=int(smooth_kernel_px))
                     Z = np.where(mask, Zs, Z)
                 else:
-                    Zs = _smooth_normalized(Z, write_mask=mask, kernel_px=int(smooth_kernel_px))
                     Z = np.where(mask & np.isfinite(Z), Zs, Z)
 
-            # drizzle floor to zero (does not touch NaNs)
+            # Drizzle floor to zero, preserving NaNs.
             if drizzle_to_zero is not None:
-                Z = np.where(np.isfinite(Z) & (Z < float(drizzle_to_zero)), 0.0, Z)
+                Z = np.where(
+                    np.isfinite(Z) & (Z < float(drizzle_to_zero)),
+                    0.0,
+                    Z,
+                )
 
-            return it, Z, int(wet.sum()), int(dry.sum()), int(len(val_tr)), True
+            # ----------------------------------------------------
+            # I) display/cosmetic rainfall field
+            # ----------------------------------------------------
+            if make_display_field:
+                Z_display = _cosmetic_smooth_rain_for_display(
+                    Z,
+                    mask,
+                    kernel_px=display_smooth_kernel_px,
+                    fill_holes=display_smooth_fill_holes,
+                    drizzle_to_zero=drizzle_to_zero,
+                    apply_edge_taper=apply_display_edge_taper,
+                    edge_taper_pixels=display_edge_taper_pixels,
+                    edge_taper_min_weight=display_edge_taper_min_weight,
+                )
+            else:
+                Z_display = Z.copy()
+
+            # ----------------------------------------------------
+            # J) categorical coverage quality layer
+            # ----------------------------------------------------
+            if make_coverage_quality:
+                coverage_quality = _coverage_quality_from_confidence(
+                    conf,
+                    support_mask=mask,
+                    med_thr=float(coverage_quality_med_thr),
+                    high_thr=float(coverage_quality_high_thr),
+                )
+            else:
+                coverage_quality = np.zeros_like(mask, dtype=np.int8)
+
+            return it, Z, Z_display, conf, mask, coverage_quality, nwet, ndry, ntrain, nsupport, True
 
         except Exception:
-            Z = np.full_like(LON, insufficient_training_fill, float)
-            return it, Z, int(wet.sum()), int(dry.sum()), int(len(val_tr)), False
+            return it, Z_fail, D_fail, C_fail, M_fail, Q_fail, nwet, ndry, ntrain, nsupport, False
 
+    # ------------------------------------------------------------
+    # 7) parallel execution
+    # ------------------------------------------------------------
     backend = "loky" if parallel_backend_name == "processes" else "threading"
+
     with parallel_backend(backend):
         results = Parallel(n_jobs=int(n_jobs))(
             delayed(_do_one)(i, t) for i, t in enumerate(times)
         )
 
-    for it, Z, nwet, ndry, ntrain, ok_flag in results:
-        out[it, :, :] = Z
-        diag["wet_counts"].append(nwet)
-        diag["dry_counts"].append(ndry)
-        diag["train_counts"].append(ntrain)
+    # ------------------------------------------------------------
+    # 8) collect outputs
+    # ------------------------------------------------------------
+    for it, Z, Z_display, conf, mask, coverage_quality, nwet, ndry, ntrain, nsupport, ok_flag in results:
+        rain_out[it, :, :] = Z
+        display_out[it, :, :] = Z_display
+        conf_out[it, :, :] = conf
+        mask_out[it, :, :] = mask.astype(np.int8)
+        coverage_quality_out[it, :, :] = coverage_quality.astype(np.int8)
+
+        diag["wet_counts"].append(int(nwet))
+        diag["dry_counts"].append(int(ndry))
+        diag["train_counts"].append(int(ntrain))
+        diag["support_point_counts"].append(int(nsupport))
+        diag["supported_pixel_counts"].append(int(np.count_nonzero(mask)))
+
+        if np.any(mask):
+            diag["mean_confidence_supported"].append(float(np.nanmean(conf[mask])))
+        else:
+            diag["mean_confidence_supported"].append(float("nan"))
+
+        if np.isfinite(conf).any():
+            diag["max_confidence"].append(float(np.nanmax(conf)))
+        else:
+            diag["max_confidence"].append(float("nan"))
+
+        # Store per-time quality class counts for troubleshooting.
+        uq, ct = np.unique(coverage_quality.astype(np.int8), return_counts=True)
+        diag["coverage_quality_counts"].append(
+            {int(k): int(v) for k, v in zip(uq, ct)}
+        )
+
         diag["counts"]["ok" if ok_flag else "failed_or_skipped"] += 1
 
-    da = xr.DataArray(
-        out,
-        coords={"time": times.tz_localize(None), "lat": yv, "lon": xv},
+    # ------------------------------------------------------------
+    # 9) build DataArray/Dataset
+    # ------------------------------------------------------------
+    time_values = pd.DatetimeIndex(times).tz_localize(None).values.astype("datetime64[ns]")
+
+    R_da = xr.DataArray(
+        rain_out,
+        coords={"time": time_values, "lat": yv, "lon": xv},
         dims=("time", "lat", "lon"),
         name="R_mm_per_h",
         attrs={
+            "long_name": "Primary gridded CML rainfall rate",
+            "standard_name": "rainfall_rate",
             "units": "mm h-1",
+            "grid_method": "RainLINK-style Ordinary Kriging on fixed Ghana grid",
+            "description": (
+                "Primary scientific gridded rainfall field derived from CML link-level "
+                "rainfall estimates. This is the operational rainfall variable intended "
+                "for downstream use, blending, and ingestion. Unsupported pixels are NaN "
+                "by default. Support/confidence geometry can be computed from midpoint, "
+                "start-mid-end, or along-link support points."
+            ),
+            "operational_use": (
+                "Use this variable as the primary gridded CML rainfall estimate."
+            ),
+            "grid_res_deg": float(grid_res_deg),
+            "fixed_extent": str(tuple(fixed_extent)),
+            "support_geometry": support_geometry,
+        },
+    )
+
+    if not return_dataset:
+        return R_da, diag
+
+    R_display_da = xr.DataArray(
+        display_out,
+        coords={"time": time_values, "lat": yv, "lon": xv},
+        dims=("time", "lat", "lon"),
+        name="R_display_mm_per_h",
+        attrs={
+            "long_name": "Display-only gridded CML rainfall rate",
+            "units": "mm h-1",
+            "description": (
+                "Cosmetically smoothed rainfall field for visualization and diagnostic "
+                "plotting only. This variable may include display smoothing and/or edge "
+                "tapering and can differ numerically from R_mm_per_h. Do not use this "
+                "variable for operational blending, scientific validation, quantitative "
+                "forecasting, or API ingestion unless explicitly requested."
+            ),
+            "operational_use": (
+                "Do not export/use in the main operational NetCDF product. "
+                "Use R_mm_per_h instead."
+            ),
+            "support_geometry": support_geometry,
+            "edge_taper_applied": bool(apply_display_edge_taper),
+            "edge_taper_pixels": int(display_edge_taper_pixels),
+            "edge_taper_min_weight": float(display_edge_taper_min_weight),
+        },
+    )
+
+    conf_da = xr.DataArray(
+        conf_out,
+        coords={"time": time_values, "lat": yv, "lon": xv},
+        dims=("time", "lat", "lon"),
+        name="cml_support_confidence",
+        attrs={
+            "long_name": "CML rainfall support confidence",
+            "units": "1",
+            "valid_min": 0.0,
+            "valid_max": 1.0,
+            "description": (
+                "Practical support/confidence indicator based on local CML network geometry "
+                "and wet/dry consistency. This is not a formal probabilistic uncertainty estimate. "
+                "When support_geometry='link_path', confidence is computed from sampled points along "
+                "each CML path, not only from link midpoints."
+            ),
+            "support_geometry": support_geometry,
+        },
+    )
+
+    mask_da = xr.DataArray(
+        mask_out,
+        coords={"time": time_values, "lat": yv, "lon": xv},
+        dims=("time", "lat", "lon"),
+        name="cml_support_mask",
+        attrs={
+            "long_name": "CML rainfall support mask",
+            "units": "1",
+            "flag_values": "0, 1",
+            "flag_meanings": "unsupported supported",
+            "description": (
+                "Binary mask identifying grid cells supported by nearby wet CML geometry, "
+                "optionally constrained by nearby dry CML geometry. When support_geometry='link_path', "
+                "the support mask is computed from sampled points along each CML path."
+            ),
+            "support_geometry": support_geometry,
+        },
+    )
+
+    coverage_quality_da = xr.DataArray(
+        coverage_quality_out,
+        coords={"time": time_values, "lat": yv, "lon": xv},
+        dims=("time", "lat", "lon"),
+        name="cml_coverage_quality",
+        attrs={
+            "long_name": "CML rainfall coverage quality class",
+            "units": "1",
+            "flag_values": "0, 1, 2, 3",
+            "flag_meanings": (
+                "unsupported low_confidence moderate_confidence high_confidence"
+            ),
+            "description": (
+                "Categorical CML coverage/support quality derived from "
+                "cml_support_confidence and cml_support_mask. "
+                "This layer is intended to help downstream users decide how strongly "
+                "to use or blend the CML rainfall field."
+            ),
+            "class_0": "unsupported",
+            "class_1": "low confidence / weak CML support",
+            "class_2": "moderate confidence / usable with caution",
+            "class_3": "high confidence / strong CML support",
+            "medium_threshold": float(coverage_quality_med_thr),
+            "high_threshold": float(coverage_quality_high_thr),
+            "support_geometry": support_geometry,
+        },
+    )
+
+    ds = xr.Dataset(
+        data_vars={
+            "R_mm_per_h": R_da,
+            "R_display_mm_per_h": R_display_da,
+            "cml_support_confidence": conf_da,
+            "cml_support_mask": mask_da,
+            "cml_coverage_quality": coverage_quality_da,
+        },
+        coords={
+            "time": time_values,
+            "lat": yv,
+            "lon": xv,
+        },
+        attrs={
+            "title": "Ghana CML rainfall gridded product with support/confidence layers",
+            "summary": (
+                "Dataset containing the primary scientific CML gridded rainfall field, "
+                "CML support confidence, CML support mask, categorical CML coverage quality, "
+                "and an optional internal display-only rainfall layer."
+            ),
             "grid_method": "RainLINK-style OK on fixed Ghana grid",
             "grid_res_deg": float(grid_res_deg),
             "fixed_extent": str(tuple(fixed_extent)),
+            "support_geometry": support_geometry,
+            "support_note": (
+                "Link-path support points are used only to improve support/confidence geometry. "
+                "The exported link-level point rainfall variable should remain assigned to link midpoints."
+            ),
+            "display_note": (
+                "R_display_mm_per_h is intended for internal visualization/diagnostics only. "
+                "It may differ numerically from R_mm_per_h and should not be used as the "
+                "main operational rainfall variable."
+            ),
+            "operational_export_note": (
+                "For operational NetCDF export to TAHMO/Rainboo, include R_mm_per_h, "
+                "cml_support_confidence, cml_support_mask, cml_coverage_quality, "
+                "R_point_mm_per_h, link_lon, link_lat, and link_id. Do not include "
+                "R_display_mm_per_h in the main operational product unless explicitly requested."
+            ),
+            "coverage_quality_note": (
+                "cml_coverage_quality is derived from cml_support_confidence and cml_support_mask "
+                "to provide a simple downstream decision layer for blending or filtering."
+            ),
         },
     )
-    return da, diag
+
+    ds["lat"].attrs.update({"standard_name": "latitude", "units": "degrees_north"})
+    ds["lon"].attrs.update({"standard_name": "longitude", "units": "degrees_east"})
+    ds["time"].attrs.update({"standard_name": "time"})
+
+    return ds, diag
 
 def save_15min_grid_and_points_netcdf(
     R_da_day: xr.DataArray,          # (time, lat, lon) for one day (or any time range)
@@ -2268,15 +3220,28 @@ def save_15min_grid_and_points_netcdf(
     return written
 
 def save_15min_grid_and_points_netcdf_for_day(
-    R_da: xr.DataArray,              # can be multi-day; we will filter to `day`
-    df_s5: pd.DataFrame,             # can be multi-day; we will filter to `day`
+    grid_data: xr.Dataset | xr.DataArray,   # preferred: grid_ds from gridding function
+    df_s5: pd.DataFrame,                    # can be multi-day; we will filter to `day`
     meta_xy: pd.DataFrame,
     out_dir: str,
     day: pd.Timestamp | str,
     base_name: str = "ghana_cml_R_15min",
     *,
+    # operational variable names
     var_grid: str = "R_mm_per_h",
     var_point: str = "R_point_mm_per_h",
+
+    # optional grid support variables to export if available
+    support_conf_var: str = "cml_support_confidence",
+    support_mask_var: str = "cml_support_mask",
+    coverage_quality_var: str = "cml_coverage_quality",
+
+    # IMPORTANT:
+    # R_display_mm_per_h is intentionally excluded by default to avoid
+    # operational confusion. Keep it for internal diagnostics/plots only.
+    include_display_field: bool = False,
+    display_var: str = "R_display_mm_per_h",
+
     engine: str = "netcdf4",
     complevel: int = 5,
     dtype: str = "float32",
@@ -2291,50 +3256,167 @@ def save_15min_grid_and_points_netcdf_for_day(
     institution: str = "TAHMO",
     producer_name: str = "Trans-African Hydro-Meteorological Observatory (TAHMO)",
     project: str = "PRIME Ghana CML rainfall retrieval",
-    source: str = "Commercial Microwave Links (CML); RainLINK-like processing; Ordinary Kriging gridding",
+    source: str = (
+        "Commercial Microwave Links (CML); RainLINK-like processing; "
+        "Ordinary Kriging gridding with CML support/confidence layers"
+    ),
     references: str | None = None,
     comment: str | None = None,
     ts_fmt: str = "%Y%m%dT%H%M%SZ",
 ):
+    """
+    Write one operational NetCDF file per 15-min timestamp for one day.
+
+    Preferred input
+    ---------------
+    grid_data : xr.Dataset
+        Dataset returned by grid_rain_15min_rainlink_ok_full_ghana(), containing:
+          - R_mm_per_h(time, lat, lon)
+          - cml_support_confidence(time, lat, lon)
+          - cml_support_mask(time, lat, lon)
+          - cml_coverage_quality(time, lat, lon)
+
+        R_display_mm_per_h may exist in grid_data but is not exported by default.
+
+    Backward-compatible input
+    -------------------------
+    grid_data : xr.DataArray
+        Single gridded rainfall DataArray. In this case only var_grid and point
+        variables are written.
+
+    Operational NetCDF contents
+    ---------------------------
+    Main gridded variables:
+      - R_mm_per_h(time, lat, lon)
+      - cml_support_confidence(time, lat, lon), if available
+      - cml_support_mask(time, lat, lon), if available
+      - cml_coverage_quality(time, lat, lon), if available
+
+    Link-point variables:
+      - R_point_mm_per_h(time, link)
+      - link_lon(link)
+      - link_lat(link)
+      - link_id(link)
+
+    Notes
+    -----
+    R_display_mm_per_h is excluded by default to avoid confusing downstream
+    operational users. It is a display/diagnostic field, not the primary
+    rainfall estimate.
+
+    Important dtype behavior
+    ------------------------
+    Continuous variables:
+      - R_mm_per_h
+      - cml_support_confidence
+      - R_point_mm_per_h
+    are written as float32.
+
+    Categorical variables:
+      - cml_support_mask
+      - cml_coverage_quality
+    are written as int8 without _FillValue so xarray does not decode them
+    back to float.
+    """
+
     os.makedirs(out_dir, exist_ok=True)
-    day_ts = pd.Timestamp(day).tz_localize(None)
+
+    # ------------------------------------------------------------
+    # 0) Normalize requested day
+    # ------------------------------------------------------------
+    day_ts = pd.Timestamp(day)
+
+    if day_ts.tzinfo is not None:
+        day_ts = day_ts.tz_convert("UTC").tz_localize(None)
+    else:
+        day_ts = day_ts.tz_localize(None)
+
     day_date = day_ts.date()
 
-    # -------------------------
-    # 1) FILTER GRID TO DAY  ✅
-    # -------------------------
-    t_all = pd.to_datetime(R_da["time"].values)
+    # ------------------------------------------------------------
+    # 1) Normalize grid input
+    # ------------------------------------------------------------
+    if isinstance(grid_data, xr.DataArray):
+        # Backward compatibility: single rainfall DataArray.
+        R_da = grid_data
+
+        if R_da.name is None:
+            R_da = R_da.rename(var_grid)
+
+        grid_ds_all = R_da.to_dataset(name=var_grid)
+
+    elif isinstance(grid_data, xr.Dataset):
+        grid_ds_all = grid_data
+
+        if var_grid not in grid_ds_all.data_vars:
+            raise KeyError(
+                f"Primary rainfall variable '{var_grid}' not found in grid_data. "
+                f"Available variables: {list(grid_ds_all.data_vars)}"
+            )
+
+    else:
+        raise TypeError("grid_data must be an xarray Dataset or DataArray")
+
+    if "time" not in grid_ds_all.coords:
+        raise ValueError("grid_data must contain a 'time' coordinate.")
+
+    if "lat" not in grid_ds_all.coords or "lon" not in grid_ds_all.coords:
+        raise ValueError("grid_data must contain 'lat' and 'lon' coordinates.")
+
+    # ------------------------------------------------------------
+    # 2) Filter grid variables to requested day
+    # ------------------------------------------------------------
+    t_all = pd.to_datetime(grid_ds_all["time"].values)
     t_all = pd.DatetimeIndex(t_all).tz_localize(None)
 
-    mask_day = (t_all.date == day_date)
+    mask_day = np.array([t.date() == day_date for t in t_all])
+
     if mask_day.sum() == 0:
-        raise ValueError(f"No grid times found for day={day_date} in R_da.time")
+        raise ValueError(f"No grid times found for day={day_date} in grid_data.time")
 
-    R_day = R_da.sel(time=t_all[mask_day].values)
+    selected_times = t_all[mask_day]
+    grid_day = grid_ds_all.sel(time=selected_times.values)
 
-    # master time axis (grid times for requested day only)
-    times = pd.to_datetime(R_day["time"].values)
+    # Master time axis for requested day only
+    times = pd.to_datetime(grid_day["time"].values)
     times = pd.DatetimeIndex(times).tz_localize(None)
 
-    # -------------------------
-    # 2) FILTER POINTS TO DAY ✅
-    # -------------------------
+    # ------------------------------------------------------------
+    # 3) Select operational grid variables to write
+    # ------------------------------------------------------------
+    grid_vars_to_write = [var_grid]
+
+    for v in [support_conf_var, support_mask_var, coverage_quality_var]:
+        if v in grid_day.data_vars:
+            grid_vars_to_write.append(v)
+
+    if include_display_field and display_var in grid_day.data_vars:
+        grid_vars_to_write.append(display_var)
+
+    # ------------------------------------------------------------
+    # 4) Filter points/link rainfall to requested day
+    # ------------------------------------------------------------
     df = df_s5.copy()
+
     idx = pd.to_datetime(df.index)
     idx = pd.DatetimeIndex(idx)
+
     if idx.tz is not None:
         idx = idx.tz_convert("UTC").tz_localize(None)
     else:
         idx = idx.tz_localize(None)
+
     df.index = idx
     df = df[df.index.date == day_date]
 
-    # -------------------------
-    # 3) LINK MIDPOINT GEOM
-    # -------------------------
+    # ------------------------------------------------------------
+    # 5) Link midpoint geometry
+    # ------------------------------------------------------------
     m = meta_xy.drop_duplicates("ID").copy()
+
     for c in ["XStart", "YStart", "XEnd", "YEnd"]:
         m[c] = pd.to_numeric(m[c], errors="coerce")
+
     m = m.dropna(subset=["XStart", "YStart", "XEnd", "YEnd"])
 
     m["lon_mid"] = 0.5 * (m["XStart"] + m["XEnd"])
@@ -2342,7 +3424,9 @@ def save_15min_grid_and_points_netcdf_for_day(
 
     link_ids = m["ID"].astype(str).values
     n_link = len(link_ids)
+
     id2j = {lid: j for j, lid in enumerate(link_ids)}
+
     link_lon = m["lon_mid"].to_numpy(float)
     link_lat = m["lat_mid"].to_numpy(float)
 
@@ -2351,82 +3435,296 @@ def save_15min_grid_and_points_netcdf_for_day(
 
     written = []
 
-    # -------------------------
-    # 4) WRITE ONE FILE PER TIME
-    # -------------------------
+    # ------------------------------------------------------------
+    # 6) Write one file per timestamp
+    # ------------------------------------------------------------
     for tt in times:
-        # grid slice (lat, lon)
-        grid_t = R_day.sel(time=tt).astype(dtype).rename(var_grid)
+        tt_np = np.datetime64(tt)
 
-        # link vector (link,)
+        # --------------------------------------------------------
+        # A) Build link midpoint rainfall vector for this timestamp
+        # --------------------------------------------------------
         rlink = np.full((n_link,), np.nan, dtype=np.float32)
-        g = df.loc[df.index == tt]  # exact match
+
+        g = df.loc[df.index == tt]  # exact timestamp match
+
         if isinstance(g, pd.Series):
             g = g.to_frame().T
+
         if g is not None and len(g) > 0:
             for _, row in g.iterrows():
                 lid = str(row.get("ID"))
                 j = id2j.get(lid, None)
+
                 if j is None:
                     continue
+
                 val = pd.to_numeric(row.get("R_mm_per_h"), errors="coerce")
+
                 if np.isfinite(val):
                     rlink[j] = float(val)
 
+        # --------------------------------------------------------
+        # B) Build data variables for this timestamp
+        # --------------------------------------------------------
+        data_vars = {}
+
+        for v in grid_vars_to_write:
+            da_t = grid_day[v].sel(time=tt_np).expand_dims(time=[tt_np])
+
+            # Keep mask/quality as compact integer variables.
+            if v in [support_mask_var, coverage_quality_var]:
+                da_t = da_t.astype("int8")
+            else:
+                da_t = da_t.astype(dtype)
+
+            data_vars[v] = da_t
+
+        data_vars[var_point] = (("time", "link"), rlink.reshape(1, -1))
+        data_vars["link_lon"] = (("link",), link_lon)
+        data_vars["link_lat"] = (("link",), link_lat)
+        data_vars["link_id"] = (("link",), link_ids)
+
         ds = xr.Dataset(
-            data_vars={
-                var_grid: grid_t.expand_dims(time=[np.datetime64(tt)]),
-                var_point: (("time", "link"), rlink.reshape(1, -1)),
-                "link_lon": (("link",), link_lon),
-                "link_lat": (("link",), link_lat),
-                "link_id":  (("link",), link_ids),
-            },
+            data_vars=data_vars,
             coords={
-                "time": np.array([np.datetime64(tt)], dtype="datetime64[ns]"),
-                "lat": grid_t["lat"].values,
-                "lon": grid_t["lon"].values,
+                "time": np.array([tt_np], dtype="datetime64[ns]"),
+                "lat": grid_day["lat"].values,
+                "lon": grid_day["lon"].values,
                 "link": np.arange(n_link, dtype=int),
-            }
+            },
         )
 
-        # attrs
+        # --------------------------------------------------------
+        # C) Variable attributes
+        # --------------------------------------------------------
+        ds[var_grid].attrs.update({
+            "long_name": "Primary gridded CML rainfall rate",
+            "standard_name": "rainfall_rate",
+            "units": "mm h-1",
+            "description": (
+                "Primary operational gridded rainfall estimate derived from CML "
+                "link-level rainfall rates. This is the rainfall variable intended "
+                "for downstream ingestion, blending, and operational use."
+            ),
+        })
+
+        if support_conf_var in ds.data_vars:
+            ds[support_conf_var].attrs.update({
+                "long_name": "CML rainfall support confidence",
+                "units": "1",
+                "valid_min": 0.0,
+                "valid_max": 1.0,
+                "description": (
+                    "Practical CML support/confidence indicator from 0 to 1, based on "
+                    "local CML network geometry and wet/dry consistency. This is not a "
+                    "formal probabilistic uncertainty estimate. Use this layer to "
+                    "downweight or filter rainfall in weakly supported areas."
+                ),
+            })
+
+        if support_mask_var in ds.data_vars:
+            ds[support_mask_var].attrs.update({
+                "long_name": "CML rainfall support mask",
+                "units": "1",
+                "flag_values": "0, 1",
+                "flag_meanings": "unsupported supported",
+                "description": (
+                    "Binary mask identifying grid cells supported by nearby wet CML "
+                    "geometry. Cells marked unsupported should generally not be treated "
+                    "as valid CML rainfall estimates."
+                ),
+            })
+
+        if coverage_quality_var in ds.data_vars:
+            ds[coverage_quality_var].attrs.update({
+                "long_name": "CML rainfall coverage quality class",
+                "units": "1",
+                "flag_values": "0, 1, 2, 3",
+                "flag_meanings": (
+                    "unsupported low_confidence moderate_confidence high_confidence"
+                ),
+                "description": (
+                    "Categorical CML coverage/support quality derived from support "
+                    "confidence and support mask. Intended to provide a simple "
+                    "downstream decision layer for blending or filtering."
+                ),
+                "class_0": "unsupported",
+                "class_1": "low confidence / weak CML support",
+                "class_2": "moderate confidence / usable with caution",
+                "class_3": "high confidence / strong CML support",
+            })
+
+        if include_display_field and display_var in ds.data_vars:
+            ds[display_var].attrs.update({
+                "long_name": "Display-only gridded CML rainfall rate",
+                "units": "mm h-1",
+                "description": (
+                    "Display/diagnostic rainfall field only. This variable may include "
+                    "cosmetic smoothing and should not be used as the primary operational "
+                    "rainfall estimate."
+                ),
+                "operational_use": (
+                    "Do not use as primary rainfall variable; use R_mm_per_h."
+                ),
+            })
+
+        ds[var_point].attrs.update({
+            "long_name": "Link midpoint CML rainfall rate",
+            "units": "mm h-1",
+            "description": (
+                "CML link-level rainfall rate assigned to the link midpoint. This point "
+                "variable is aligned with the file time coordinate and link dimension."
+            ),
+        })
+
+        ds["link_lon"].attrs.update({
+            "long_name": "CML link midpoint longitude",
+            "units": "degrees_east",
+        })
+
+        ds["link_lat"].attrs.update({
+            "long_name": "CML link midpoint latitude",
+            "units": "degrees_north",
+        })
+
+        ds["link_id"].attrs.update({
+            "long_name": "CML link identifier",
+            "description": (
+                "Unique identifier for each CML link/path used in the rainfall retrieval."
+            ),
+        })
+
+        ds["lat"].attrs.update({
+            "standard_name": "latitude",
+            "units": "degrees_north",
+        })
+
+        ds["lon"].attrs.update({
+            "standard_name": "longitude",
+            "units": "degrees_east",
+        })
+
+        ds["time"].attrs.update({
+            "standard_name": "time",
+        })
+
+        # --------------------------------------------------------
+        # D) Global attributes
+        # --------------------------------------------------------
         ds.attrs.update({
             "Conventions": conventions,
-            "title": f"Ghana CML rainfall (15-min file) — {day_str_iso}",
-            "summary": "Single time-step NetCDF containing gridded rainfall and corresponding link midpoint rainfall.",
+            "title": f"Ghana CML rainfall operational product — {day_str_iso}",
+            "summary": (
+                "Single time-step NetCDF containing the primary gridded CML rainfall "
+                "estimate, CML support/confidence layers, categorical coverage quality, "
+                "and corresponding link-midpoint rainfall values."
+            ),
             "product_version": version,
             "institution": institution,
             "producer_name": producer_name,
             "creator_name": creator_name,
             "project": project,
             "source": source,
-            "history": f"{created}: created 15-min grid+points NetCDF",
+            "history": f"{created}: created 15-min operational CML rainfall NetCDF",
             "date_created": created,
             "time_coverage_start": str(pd.Timestamp(tt)),
             "time_coverage_end": str(pd.Timestamp(tt)),
+            "geospatial_lat_min": float(np.nanmin(ds["lat"].values)),
+            "geospatial_lat_max": float(np.nanmax(ds["lat"].values)),
+            "geospatial_lon_min": float(np.nanmin(ds["lon"].values)),
+            "geospatial_lon_max": float(np.nanmax(ds["lon"].values)),
+            "primary_rainfall_variable": var_grid,
+            "point_rainfall_variable": var_point,
+            "operational_note": (
+                "R_mm_per_h is the primary gridded rainfall variable for operational use. "
+                "CML support confidence, support mask, and coverage quality should be used "
+                "to filter, downweight, or blend the rainfall field in weakly supported areas."
+            ),
+            "display_field_note": (
+                "Display-only rainfall fields are excluded from this operational file by default "
+                "to avoid confusion with the primary rainfall estimate."
+            ),
         })
+
         if creator_email is not None:
             ds.attrs["creator_email"] = creator_email
+
         if references is not None:
             ds.attrs["references"] = references
+
         if comment is not None:
             ds.attrs["comment"] = comment
 
-        enc = {
-            var_grid: {
-                "zlib": True, "complevel": int(complevel), "shuffle": True,
-                "dtype": dtype, "_FillValue": fill_value,
-                "chunksizes": (1, min(chunks_lat, ds.sizes["lat"]), min(chunks_lon, ds.sizes["lon"])),
-            },
-            var_point: {
-                "zlib": True, "complevel": int(complevel), "shuffle": True,
-                "dtype": dtype, "_FillValue": fill_value,
-                "chunksizes": (1, min(chunks_link, n_link)),
-            },
+        # --------------------------------------------------------
+        # E) Encoding / compression
+        # --------------------------------------------------------
+        enc = {}
+
+        for v in grid_vars_to_write:
+            if v in [support_mask_var, coverage_quality_var]:
+                # Categorical variables:
+                # keep as int8 and do NOT assign _FillValue.
+                # They are fully defined everywhere:
+                #   cml_support_mask: 0/1
+                #   cml_coverage_quality: 0/1/2/3
+                #
+                # Not assigning _FillValue avoids xarray decoding these
+                # categorical layers back into float arrays when reading.
+                enc[v] = {
+                    "zlib": True,
+                    "complevel": int(complevel),
+                    "shuffle": True,
+                    "dtype": "int8",
+                    "chunksizes": (
+                        1,
+                        min(chunks_lat, ds.sizes["lat"]),
+                        min(chunks_lon, ds.sizes["lon"]),
+                    ),
+                }
+            else:
+                # Continuous variables:
+                # rainfall and confidence remain float32.
+                enc[v] = {
+                    "zlib": True,
+                    "complevel": int(complevel),
+                    "shuffle": True,
+                    "dtype": dtype,
+                    "_FillValue": fill_value,
+                    "chunksizes": (
+                        1,
+                        min(chunks_lat, ds.sizes["lat"]),
+                        min(chunks_lon, ds.sizes["lon"]),
+                    ),
+                }
+
+        enc[var_point] = {
+            "zlib": True,
+            "complevel": int(complevel),
+            "shuffle": True,
+            "dtype": dtype,
+            "_FillValue": fill_value,
+            "chunksizes": (
+                1,
+                min(chunks_link, n_link),
+            ),
         }
 
+        # Do not compress small coordinate/geometry variables.
+        enc["lat"] = {"zlib": False}
+        enc["lon"] = {"zlib": False}
+        enc["time"] = {"zlib": False}
+        enc["link"] = {"zlib": False}
+        enc["link_lon"] = {"zlib": False}
+        enc["link_lat"] = {"zlib": False}
+        enc["link_id"] = {"zlib": False}
+
+        # --------------------------------------------------------
+        # F) Write file
+        # --------------------------------------------------------
         ts = pd.Timestamp(tt).tz_localize("UTC")
         fn = os.path.join(out_dir, f"{base_name}_{ts.strftime(ts_fmt)}.nc")
+
         ds.to_netcdf(fn, engine=engine, encoding=enc)
 
         written.append(fn)
@@ -2588,11 +3886,280 @@ def cml2metadata_coupling_framework(cml, metadat):
 
     return linkdata
 
+
+def cml2metadata_coupling_framework_fast(cml, metadat):
+    """
+    Faster version of cml2metadata_coupling_framework.
+
+    Purpose
+    -------
+    Couple signal-level CML data with metadata and return RAINLINK-style link data.
+
+    Main speed improvement
+    ----------------------
+    Replaces slow Python groupby loops with vectorized pivot_table operations for
+    TSL_* and RSL_* values.
+
+    Core logic preserved
+    --------------------
+    - Builds Monitored_ID the same way.
+    - Extracts polarization the same way.
+    - Merges with metadata on Monitored_ID.
+    - Builds reverse-direction RSL table by swapping Monitored_ID and Far_end_ID.
+    - Merges TSL and RSL on:
+        Monitored_ID, Far_end_ID, Polarization, Period, EndTime
+    - Computes:
+        Pmin = RSL_MIN - TSL_AVG
+        Pmax = RSL_MAX - TSL_AVG
+    - Creates:
+        ID = Monitored_ID + '>>' + Far_end_ID
+    """
+
+    fname = os.path.basename(cml)
+
+    # ------------------------------------------------------------
+    # 1) Read CML file
+    # ------------------------------------------------------------
+    cml_dat_df = pd.read_csv(cml, header=0, sep="\t")
+
+    # ------------------------------------------------------------
+    # 2) Construct Monitored_ID exactly as before
+    # ------------------------------------------------------------
+    cml_dat_df["Monitored_ID"] = (
+        cml_dat_df["NEName"].astype(str) + "-"
+        + cml_dat_df["BrdID"].astype(str) + "-"
+        + cml_dat_df["BrdName"].astype(str) + "-"
+        + cml_dat_df["PortNO"].astype(str) + "("
+        + cml_dat_df["PortName"].astype(str) + ")-"
+        + cml_dat_df["PathID"].astype(str)
+    )
+
+    # Add polarization column
+    cml_dat_df["Polarization"] = cml_dat_df["Monitored_ID"].apply(extract_polarization)
+
+    # ------------------------------------------------------------
+    # 3) Merge CML data with metadata
+    # ------------------------------------------------------------
+    cml_data = pd.merge(cml_dat_df, metadat, on=["Monitored_ID"], how="inner")
+
+    if cml_data.empty:
+        error_message = f"No common 'Monitored_ID' found for file: {fname}"
+        print(error_message)
+        log_path = f"/home/kkumah/Projects/cml-stuff/data-cml/metadata/unmatched_cml_files_{cde_run_dte}.txt"
+        with open(log_path, "a") as f:
+            f.write(error_message + "\n")
+        return None
+
+    # ------------------------------------------------------------
+    # 4) Resolve polarization exactly as before
+    # ------------------------------------------------------------
+    cml_data["Polarization"] = np.where(
+        (cml_data["Polarization_x"] != cml_data["Polarization_y"])
+        & ~(cml_data["Polarization_x"].isin(["H", "V"])),
+        cml_data["Polarization_y"],
+        cml_data["Polarization_x"],
+    )
+
+    # ------------------------------------------------------------
+    # 5) Drop unnecessary columns, but ignore missing columns safely
+    # ------------------------------------------------------------
+    drop_cols = [
+        "ONEID", "ONEName", "NEID", "NEType",
+        "NEName", "BrdID", "BrdName", "PortNO", "PortName", "PathID",
+        "ShelfID", "BrdType", "PortID", "MOType",
+        "FBName", "EventID", "PMParameterName", "PMLocationID",
+        "PMLocation", "UpLevel", "DownLevel", "ResultOfLevel",
+        "Unnamed: 27", "Polarization_x", "Temp_ID", "Polarization_y",
+        "ATPC",
+    ]
+
+    cml_data = cml_data.drop(columns=[c for c in drop_cols if c in cml_data.columns])
+
+    # ------------------------------------------------------------
+    # 6) Define grouping columns and required event names
+    # ------------------------------------------------------------
+    group_columns = ["Monitored_ID", "Far_end_ID", "Polarization", "Period", "EndTime"]
+
+    tsl_events = ["TSL_MIN", "TSL_MAX", "TSL_CUR", "TSL_AVG"]
+    rsl_events = ["RSL_MIN", "RSL_MAX", "RSL_CUR", "RSL_AVG"]
+
+    # ------------------------------------------------------------
+    # 7) Fast TSL flattening using pivot_table
+    # ------------------------------------------------------------
+    # This replaces:
+    #   groupby(group_columns) + get_event_value_or_return_nan(...)
+    #
+    # aggfunc="first" mimics your old behavior of taking the first matching value.
+    # If duplicate event records occur within a group, this keeps the first one.
+    # ------------------------------------------------------------
+    df_tsl = cml_data[cml_data["EventName"].isin(tsl_events)].copy()
+
+    tsl_flattened = (
+        df_tsl
+        .pivot_table(
+            index=group_columns,
+            columns="EventName",
+            values="Value",
+            aggfunc="first",
+        )
+        .reset_index()
+    )
+
+    # Remove the column index name that pivot_table creates
+    tsl_flattened.columns.name = None
+
+    # Ensure all expected TSL columns exist
+    for col in tsl_events:
+        if col not in tsl_flattened.columns:
+            tsl_flattened[col] = np.nan
+
+    # ------------------------------------------------------------
+    # 8) Fast RSL flattening using swapped IDs + pivot_table
+    # ------------------------------------------------------------
+    df_rsl = cml_data[cml_data["EventName"].isin(rsl_events)].copy()
+
+    # Same as your original:
+    # df_rsl = df_rsl.rename(columns={'Monitored_ID': 'Far_end_ID', 'Far_end_ID': 'Monitored_ID'})
+    df_rsl = df_rsl.rename(
+        columns={
+            "Monitored_ID": "_tmp_Monitored_ID",
+            "Far_end_ID": "Monitored_ID",
+        }
+    )
+    df_rsl = df_rsl.rename(columns={"_tmp_Monitored_ID": "Far_end_ID"})
+
+    rsl_flattened = (
+        df_rsl
+        .pivot_table(
+            index=group_columns,
+            columns="EventName",
+            values="Value",
+            aggfunc="first",
+        )
+        .reset_index()
+    )
+
+    rsl_flattened.columns.name = None
+
+    # Ensure all expected RSL columns exist
+    for col in rsl_events:
+        if col not in rsl_flattened.columns:
+            rsl_flattened[col] = np.nan
+
+    # ------------------------------------------------------------
+    # 9) Check empty TSL/RSL results
+    # ------------------------------------------------------------
+    if tsl_flattened.empty or rsl_flattened.empty:
+        error_message = f"Skipping file {fname} due to insufficient data after processing."
+        print(error_message)
+        log_path = f"/home/kkumah/Projects/cml-stuff/data-cml/metadata/insufficient_data_{cde_run_dte}.txt"
+        with open(log_path, "a") as f:
+            f.write(error_message + "\n")
+        return None
+
+    # ------------------------------------------------------------
+    # 10) Merge TSL and RSL flattened tables
+    # ------------------------------------------------------------
+    cml_data_flattened = pd.merge(
+        tsl_flattened,
+        rsl_flattened,
+        on=group_columns,
+        how="inner",
+    )
+
+    if cml_data_flattened.empty:
+        error_message = f"Skipping file {fname}: no matching TSL/RSL directional pairs after flattening."
+        print(error_message)
+        log_path = f"/home/kkumah/Projects/cml-stuff/data-cml/metadata/insufficient_data_{cde_run_dte}.txt"
+        with open(log_path, "a") as f:
+            f.write(error_message + "\n")
+        return None
+
+    # ------------------------------------------------------------
+    # 11) Add metadata columns back
+    # ------------------------------------------------------------
+    metadata_cols = ["Frequency", "XStart", "YStart", "XEnd", "YEnd", "PathLength"]
+
+    available_metadata_cols = [c for c in metadata_cols if c in cml_data.columns]
+
+    cml_data_unique_metadata = (
+        cml_data[group_columns + available_metadata_cols]
+        .drop_duplicates(subset=group_columns)
+        .copy()
+    )
+
+    cml_data_flattened = pd.merge(
+        cml_data_flattened,
+        cml_data_unique_metadata,
+        how="left",
+        on=group_columns,
+    )
+
+    # ------------------------------------------------------------
+    # 12) Filter and compute Pmin/Pmax
+    # ------------------------------------------------------------
+    linkdata = cml_data_flattened.copy()
+
+    # Same filter as original
+    linkdata = linkdata.dropna(subset=["TSL_MIN", "TSL_MAX", "TSL_AVG", "TSL_CUR"])
+
+    if linkdata.empty:
+        error_message = f"Skipping file {fname}: no valid TSL rows after required TSL filtering."
+        print(error_message)
+        log_path = f"/home/kkumah/Projects/cml-stuff/data-cml/metadata/insufficient_data_{cde_run_dte}.txt"
+        with open(log_path, "a") as f:
+            f.write(error_message + "\n")
+        return None
+
+    try:
+        linkdata["RSL_MIN"] = pd.to_numeric(linkdata["RSL_MIN"], errors="coerce")
+        linkdata["TSL_AVG"] = pd.to_numeric(linkdata["TSL_AVG"], errors="coerce")
+        linkdata["RSL_MAX"] = pd.to_numeric(linkdata["RSL_MAX"], errors="coerce")
+
+        linkdata["Pmin"] = linkdata["RSL_MIN"] - linkdata["TSL_AVG"]
+        linkdata["Pmax"] = linkdata["RSL_MAX"] - linkdata["TSL_AVG"]
+
+    except Exception as e:
+        error_message = f"Error processing Pmin/Pmax of file {fname}: {e}"
+        print(error_message)
+        log_path = f"/home/kkumah/Projects/cml-stuff/data-cml/metadata/error_log_{cde_run_dte}.txt"
+        with open(log_path, "a") as f:
+            f.write(error_message + "\n")
+        return None
+
+    # ------------------------------------------------------------
+    # 13) Build ID, format time, frequency
+    # ------------------------------------------------------------
+    linkdata["ID"] = linkdata["Monitored_ID"].astype(str) + ">>" + linkdata["Far_end_ID"].astype(str)
+
+    linkdata = linkdata.drop(columns=["Monitored_ID", "Far_end_ID", "Period"])
+    linkdata = linkdata.rename(columns={"EndTime": "DateTime"})
+
+    linkdata["Frequency"] = pd.to_numeric(linkdata["Frequency"], errors="coerce") / 1000.0
+
+    linkdata["DateTime"] = (
+        pd.to_datetime(linkdata["DateTime"], utc=True, errors="coerce")
+        .dt.strftime("%Y%m%d%H%M")
+    )
+
+    # ------------------------------------------------------------
+    # 14) Reorder columns exactly as before
+    # ------------------------------------------------------------
+    order_columns = [
+        "Frequency", "DateTime", "Pmin", "Pmax",
+        "XStart", "YStart", "XEnd", "YEnd",
+        "ID", "Polarization", "PathLength", "TSL_AVG",
+    ]
+
+    # Make sure missing expected columns exist as NaN
+    for col in order_columns:
+        if col not in linkdata.columns:
+            linkdata[col] = np.nan
+
+    linkdata = linkdata[order_columns]
+
+    return linkdata
 #%% Some plotting
-import numpy as np
-import pandas as pd
-import matplotlib.pyplot as plt
-import matplotlib.colors as mcolors
 
 def plot_grid_with_wetdry_midpoints_discrete_linear(
     R2d,                 # xr.DataArray (lat, lon)
@@ -2683,4 +4250,272 @@ def plot_grid_with_wetdry_midpoints_discrete_linear(
     ax.legend(loc="lower left")
     ax.grid(alpha=0.2)
     plt.tight_layout()
+    plt.show()
+
+
+#-------------------------------------------------------------
+
+def plot_cml_grid_diagnostics(
+    grid_ds,
+    meta_xy_grid,
+    t0,
+    *,
+    extent=(-3.5, 1.5, 4.5, 11.5),
+    vars_to_plot=None,
+    figsize=(16, 13),
+    rainfall_vmin=0.0,
+    rainfall_vmax=12.0,
+    rainfall_cmap="Spectral_r",
+    confidence_cmap="viridis",
+    mask_cmap="Greys",
+    quality_cmap="viridis",
+    overlay_links=True,
+    overlay_midpoints=True,
+    midpoint_size=7,
+    link_linewidth=0.25,
+    link_alpha=0.25,
+):
+    """
+    Multi-panel diagnostic plot for Ghana CML gridded rainfall outputs.
+
+    Plots the main output layers together:
+      - R_mm_per_h
+      - R_display_mm_per_h
+      - cml_support_confidence
+      - cml_support_mask
+      - cml_coverage_quality
+
+    Parameters
+    ----------
+    grid_ds : xr.Dataset
+        Dataset returned by grid_rain_15min_rainlink_ok_full_ghana.
+    meta_xy_grid : pd.DataFrame
+        Link metadata with ID, XStart, YStart, XEnd, YEnd.
+    t0 : str or pd.Timestamp
+        Timestamp to plot.
+    extent : tuple
+        Map extent as (lon_min, lon_max, lat_min, lat_max).
+    vars_to_plot : list or None
+        Variables to plot. If None, uses all available standard variables.
+    """
+
+    # ------------------------------------------------------------
+    # Default variables, only keep those present in grid_ds
+    # ------------------------------------------------------------
+    default_vars = [
+        "R_mm_per_h",
+        "R_display_mm_per_h",
+        "cml_support_confidence",
+        "cml_support_mask",
+        "cml_coverage_quality",
+    ]
+
+    if vars_to_plot is None:
+        vars_to_plot = [v for v in default_vars if v in grid_ds.data_vars]
+    else:
+        vars_to_plot = [v for v in vars_to_plot if v in grid_ds.data_vars]
+
+    if len(vars_to_plot) == 0:
+        raise ValueError("None of the requested variables exist in grid_ds.")
+
+    # ------------------------------------------------------------
+    # Build start / mid / end points
+    # ------------------------------------------------------------
+    meta_plot = (
+        meta_xy_grid[["ID", "XStart", "YStart", "XEnd", "YEnd"]]
+        .drop_duplicates("ID")
+        .copy()
+    )
+
+    for c in ["XStart", "YStart", "XEnd", "YEnd"]:
+        meta_plot[c] = pd.to_numeric(meta_plot[c], errors="coerce")
+
+    meta_plot = meta_plot.dropna(subset=["XStart", "YStart", "XEnd", "YEnd"])
+
+    meta_plot["lon_mid"] = (meta_plot["XStart"] + meta_plot["XEnd"]) / 2.0
+    meta_plot["lat_mid"] = (meta_plot["YStart"] + meta_plot["YEnd"]) / 2.0
+
+    # ------------------------------------------------------------
+    # Panel layout
+    # ------------------------------------------------------------
+    n = len(vars_to_plot)
+
+    if n <= 2:
+        nrows, ncols = 1, n
+    elif n <= 4:
+        nrows, ncols = 2, 2
+    else:
+        nrows, ncols = 2, 3
+
+    fig, axes = plt.subplots(
+        nrows=nrows,
+        ncols=ncols,
+        figsize=figsize,
+        subplot_kw={"projection": ccrs.PlateCarree()},
+        constrained_layout=True,
+    )
+
+    axes = np.atleast_1d(axes).ravel()
+
+    # ------------------------------------------------------------
+    # Variable-specific plotting settings
+    # ------------------------------------------------------------
+    def _settings_for_var(plot_var):
+        if plot_var in ["R_mm_per_h", "R_display_mm_per_h"]:
+            return {
+                "cmap": rainfall_cmap,
+                "vmin": rainfall_vmin,
+                "vmax": rainfall_vmax,
+                "label": "Rain rate (mm h$^{-1}$)",
+                "title": "Scientific rainfall" if plot_var == "R_mm_per_h" else "Display rainfall",
+                "norm": None,
+                "ticks": None,
+            }
+
+        if plot_var == "cml_support_confidence":
+            return {
+                "cmap": confidence_cmap,
+                "vmin": 0.0,
+                "vmax": 1.0,
+                "label": "Support confidence (0–1)",
+                "title": "CML support confidence",
+                "norm": None,
+                "ticks": None,
+            }
+
+        if plot_var == "cml_support_mask":
+            bounds = [-0.5, 0.5, 1.5]
+            cmap = mcolors.ListedColormap(["white", "black"])
+            norm = mcolors.BoundaryNorm(bounds, cmap.N)
+            return {
+                "cmap": cmap,
+                "vmin": None,
+                "vmax": None,
+                "label": "Support mask",
+                "title": "CML support mask",
+                "norm": norm,
+                "ticks": [0, 1],
+            }
+
+        if plot_var == "cml_coverage_quality":
+            bounds = [-0.5, 0.5, 1.5, 2.5, 3.5]
+            cmap = mcolors.ListedColormap(["white", "lightgray", "orange", "green"])
+            norm = mcolors.BoundaryNorm(bounds, cmap.N)
+            return {
+                "cmap": cmap,
+                "vmin": None,
+                "vmax": None,
+                "label": "Coverage quality class",
+                "title": "CML coverage quality",
+                "norm": norm,
+                "ticks": [0, 1, 2, 3],
+            }
+
+        return {
+            "cmap": "viridis",
+            "vmin": None,
+            "vmax": None,
+            "label": plot_var,
+            "title": plot_var,
+            "norm": None,
+            "ticks": None,
+        }
+
+    # ------------------------------------------------------------
+    # Plot panels
+    # ------------------------------------------------------------
+    for ax, plot_var in zip(axes, vars_to_plot):
+        da_plot = grid_ds[plot_var].sel(time=t0, method="nearest")
+        settings = _settings_for_var(plot_var)
+
+        plot_kwargs = dict(
+            ax=ax,
+            transform=ccrs.PlateCarree(),
+            cmap=settings["cmap"],
+            add_colorbar=False,
+        )
+
+        if settings["norm"] is not None:
+            plot_kwargs["norm"] = settings["norm"]
+        else:
+            plot_kwargs["vmin"] = settings["vmin"]
+            plot_kwargs["vmax"] = settings["vmax"]
+
+        pcm = da_plot.plot(**plot_kwargs)
+
+        # Map features
+        ax.add_feature(cfeature.LAND, facecolor="lightgray", alpha=0.15)
+        ax.add_feature(cfeature.COASTLINE, linewidth=0.6)
+        ax.add_feature(cfeature.BORDERS, linewidth=0.6)
+        ax.add_feature(cfeature.LAKES, linewidth=0.3, edgecolor="black", facecolor="none")
+        ax.add_feature(cfeature.RIVERS, linewidth=0.3)
+
+        ax.set_extent(extent, crs=ccrs.PlateCarree())
+
+        # Link lines
+        if overlay_links:
+            for _, row in meta_plot.iterrows():
+                ax.plot(
+                    [row["XStart"], row["XEnd"]],
+                    [row["YStart"], row["YEnd"]],
+                    color="black",
+                    linewidth=link_linewidth,
+                    alpha=link_alpha,
+                    transform=ccrs.PlateCarree(),
+                    zorder=3,
+                )
+
+        # Link midpoints
+        if overlay_midpoints:
+            ax.scatter(
+                meta_plot["lon_mid"],
+                meta_plot["lat_mid"],
+                s=midpoint_size,
+                c="black",
+                label="Link midpoint",
+                transform=ccrs.PlateCarree(),
+                zorder=4,
+            )
+
+        # Gridlines
+        gl = ax.gridlines(draw_labels=True, linewidth=0.3, alpha=0.4, linestyle="--")
+        gl.top_labels = False
+        gl.right_labels = False
+
+        # Reduce clutter in multi-panel plot
+        if ax not in axes[::ncols]:
+            gl.left_labels = False
+        if ax not in axes[-ncols:]:
+            gl.bottom_labels = False
+
+        # Colorbar
+        cbar = fig.colorbar(
+            pcm,
+            ax=ax,
+            shrink=0.75,
+            pad=0.02,
+            ticks=settings["ticks"],
+        )
+        cbar.set_label(settings["label"])
+
+        # Better labels for categorical coverage quality
+        if plot_var == "cml_coverage_quality":
+            cbar.ax.set_yticklabels(["0 unsupported", "1 low", "2 moderate", "3 high"])
+
+        if plot_var == "cml_support_mask":
+            cbar.ax.set_yticklabels(["0 unsupported", "1 supported"])
+
+        t_used = pd.to_datetime(da_plot["time"].values)
+        ax.set_title(f"{settings['title']}\n{plot_var}\n{t_used}", fontsize=10)
+
+    # Hide unused panels
+    for ax in axes[len(vars_to_plot):]:
+        ax.set_visible(False)
+
+    fig.suptitle(
+        f"Ghana CML Rainfall Diagnostic Layers\nTime: {pd.to_datetime(t0)}",
+        fontsize=15,
+        y=1.02,
+    )
+
     plt.show()

@@ -1,19 +1,20 @@
 #%%
 import gc
-from CML_Rainfall_Retrieval_Pipeline_modes_TAHMO_20260330 import *
+from CML_Rainfall_Retrieval_Pipeline_modes_TAHMO_20260418 import *
 
 #%% Define paths
 metadata_path = r'/home/kkumah/Projects/cml-stuff/data-cml/outs'
 raw_cml_path = r'/home/kkumah/Projects/cml-stuff/data-cml/rsl'
 # r'/home/kkumah/Projects/cml-stuff/data-cml/rsl_2026'
 # 
-out_CML_R_path = r'/home/kkumah/Projects/cml-stuff/new_out_15min_oper'
+out_CML_R_path = r'/home/kkumah/Projects/cml-stuff/misc'
+# r'/home/kkumah/Projects/cml-stuff/new_out_15min_oper'
 # r'/home/kkumah/Projects/cml-stuff/new_out_cml_Rain'
 #%% Block 0 — Inputs: Gathering and Linking CML Data and Metadata
 # e.g Schedule_pfm_SDH_20250919181726281472160571840_1.txt
 matched_metadata = pd.read_csv(os.path.join(metadata_path, 'matched_metadata_kkk_20250527.csv'))
 
-target_date = pd.to_datetime("2025-06-25 23:59:00") # or set to None to use latest available
+target_date = pd.to_datetime("2025-06-15 23:59:00") # or set to None to use latest available
 if target_date is not None:
     dt_args = (
         int(target_date.year),
@@ -40,7 +41,9 @@ cutoff_time = latest_dt - timedelta(hours=72)
 
 recent_files = [(dt, f) for dt, f in file_datetimes if cutoff_time <= dt <= latest_dt]
 recent_files.sort(key=lambda x: x[0])
-
+print("First file:", recent_files[0])
+print("Last file: ",  recent_files[-1][1])
+print("Number of files: " + str(len(recent_files)))
 #%% Block 1 — Coupling raw CML to metadata
 
 coupled_dat = []
@@ -52,7 +55,7 @@ for idx, f in enumerate(recent_files):
     if idx % 5 == 0:
         print(f'Processed {idx} files')
     
-    coupled_dat.append(cml2metadata_coupling_framework(cml=filename, metadat=matched_metadata))
+    coupled_dat.append(cml2metadata_coupling_framework_fast(cml=filename, metadat=matched_metadata))
 
 df_raw = pd.concat(coupled_dat, ignore_index=True)
 #%% Block 2 — R0 Cleaning (quality control): The Preprocessing and Cleaning Pipeline
@@ -86,7 +89,7 @@ df_rate = rainlink_strict_R(dfA, R_min=0.0)
 df_s5, meta_xy_grid = prepare_inputs_for_gridding(df_rate, ts_15)
 gc.collect()
 #%% Block 6 — Gridding (maps): The Gridding Pipeline
-df_s5_20250619 = df_s5[df_s5.index.date ==  latest_dt.date()] # pd.to_datetime("2025-06-19").date()
+df_s5_20250615 = df_s5[df_s5.index.date ==  latest_dt.date()] # pd.to_datetime("2025-06-19").date()
 # R_da_rl, diag_rl = grid_rain_15min_rainlink_ok(
 #     df_s5, 
 #     meta_xy_grid,
@@ -110,41 +113,151 @@ df_s5_20250619 = df_s5[df_s5.index.date ==  latest_dt.date()] # pd.to_datetime("
 # )
 # print(diag_rl)
 # df_meta = meta_xy_grid.copy()
-R_da, diag = grid_rain_15min_rainlink_ok_full_ghana(
-    df_s5=df_s5,
+# R_da, diag = grid_rain_15min_rainlink_ok_full_ghana(
+#     df_s5=df_s5_20250619,
+#     df_meta_for_xy=meta_xy_grid,
+#     fixed_extent=(-3.5, 1.5, 4.5, 11.5),
+#     grid_res_deg=0.03,
+#     wet_thr=0.8,
+#     dry_thr=0.05,
+#     ok_model="exponential",
+#     ok_range_km=22.0, # 22.0
+#     ok_nugget_frac=0.4,
+#     min_pts_ok=15,
+#     support_k=2,
+#     support_radius_km=40.0,
+#     dry_radius_km=3.0,
+#     use_dry_constraint=True,
+#     use_soft_confidence=True,
+#     confidence_floor=0.03,# 0.03
+#     confidence_power=1.1, # 1.1
+#     drizzle_to_zero=0.10,
+#     smooth_kernel_px=2, # 
+#     smooth_fill_holes=False,
+#     outside_support_fill=np.nan,
+#     insufficient_training_fill=np.nan,
+#     n_jobs=20,
+# )
+# print(diag)
+
+grid_ds, diag = grid_rain_15min_rainlink_ok_full_ghana(
+    df_s5=df_s5_20250615,
     df_meta_for_xy=meta_xy_grid,
     fixed_extent=(-3.5, 1.5, 4.5, 11.5),
     grid_res_deg=0.03,
+
     wet_thr=0.8,
     dry_thr=0.05,
+
     ok_model="exponential",
-    ok_range_km=18.0,
+    ok_range_km=22.0,
     ok_nugget_frac=0.4,
     min_pts_ok=15,
+
+    support_geometry="link_path",
+    n_support_points_per_link=5,
+    support_point_spacing_km=2.0,
+    min_support_points_per_link=3,
+    max_support_points_per_link=7,
+    use_length_conditioned_support_points=True,
+
     support_k=2,
-    support_radius_km=18.0,
-    dry_radius_km=8.0,
+    support_radius_km=30.0,
+    dry_radius_km=3.0,
+
     use_dry_constraint=True,
     use_soft_confidence=True,
-    confidence_floor=0.12,
-    confidence_power=1.5,
+    confidence_floor=0.03,
+    confidence_power=1.1,
+    confidence_dry_penalty_weight=0.50,
+
     drizzle_to_zero=0.10,
+
     smooth_kernel_px=1,
     smooth_fill_holes=False,
+
+    clean_support=True,
+    support_closing_iters=1,
+    support_fill_holes=True,
+    support_max_hole_px=20,
+
+    make_display_field=True,
+    display_smooth_kernel_px=4,
+    display_smooth_fill_holes=False,
+
+    apply_display_edge_taper=True,
+    display_edge_taper_pixels=8,
+    display_edge_taper_min_weight=0.02,
+
+    make_coverage_quality=True,
+    coverage_quality_med_thr=0.50,
+    coverage_quality_high_thr=0.75,
+
     outside_support_fill=np.nan,
     insufficient_training_fill=np.nan,
-    n_jobs=16,
+
+    n_jobs=20,
+    return_dataset=True,
 )
-print(diag)
+
+print(diag["counts"])
+print(diag["coverage_quality_counts"][:3])
 #%% Block 7 — Saving outputs: Save slices
 
-out_files = save_15min_grid_and_points_netcdf_for_day(
-    R_da=R_da,          # your (time, lat, lon) rainfall
-    df_s5=df_s5,   # your link table for that day
-    meta_xy=meta_xy_grid,       # link endpoints
+written_files = save_15min_grid_and_points_netcdf_for_day(
+    grid_data=grid_ds,
+    df_s5=df_s5_20250615,
+    meta_xy=meta_xy_grid,
     out_dir=out_CML_R_path,
-    day=latest_dt.date().strftime('%Y-%m-%d'),
-    base_name="Ghana_cml_R",
-    version="V1",
+    day="2025-06-15",
+    base_name="ghana_cml_R_15min",
+    include_display_field=False,   # recommended for Rainboo/TAHMO operational files
 )
-print("Wrote", len(out_files), "files for", latest_dt.date().strftime('%Y-%m-%d'))
+
+ds_check = xr.open_dataset(written_files[0])
+
+print(ds_check["R_mm_per_h"].dtype)
+print(ds_check["cml_support_confidence"].dtype)
+print(ds_check["cml_support_mask"].dtype)
+print(ds_check["cml_coverage_quality"].dtype)
+
+print(np.unique(ds_check["cml_support_mask"].values))
+print(np.unique(ds_check["cml_coverage_quality"].values))
+
+print(list(ds_check.data_vars))
+#%%
+
+plot_cml_grid_diagnostics(
+    grid_ds,
+    meta_xy_grid,
+    t0="2025-06-15 03:45:00",
+    extent=(-3.5, 1.5, 4.5, 11.5),
+)
+gc.collect()
+
+
+plot_cml_grid_diagnostics(
+    grid_ds,
+    meta_xy_grid,
+    t0="2025-06-15 03:45:00",
+    vars_to_plot=[
+        "R_mm_per_h",
+        "R_display_mm_per_h",
+        "cml_support_confidence",
+        "cml_support_mask",
+    ],
+)
+gc.collect()
+
+plot_cml_grid_diagnostics(
+    grid_ds,
+    meta_xy_grid,
+    t0="2025-06-15 03:45:00",
+    vars_to_plot=[
+        "R_mm_per_h",
+        "R_display_mm_per_h",
+    ],
+    figsize=(13, 6),
+)
+
+gc.collect()
