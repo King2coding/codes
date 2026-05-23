@@ -14,7 +14,12 @@
 # preceding lookback window for dry-baseline estimation before gridding/saving
 # the selected day.
 
+
 from __future__ import annotations
+
+import warnings
+warnings.filterwarnings("ignore", category=FutureWarning)
+warnings.filterwarnings("ignore", message="pkg_resources is deprecated*", category=UserWarning)
 
 import gc
 import os
@@ -56,7 +61,8 @@ raw_cml_dir = Path(r"/home/kkumah/Projects/cml-stuff/data-cml/rsl")
 
 # Use a dedicated output directory for the CML-only reference used by MSG training.
 # This avoids overwriting older/API-test products.
-output_dir = Path(r"/home/kkumah/Projects/cml-stuff/new_out_cml_Rain_bas_stats_training_ref")
+output_dir = Path(r"/home/kkumah/Projects/cml-stuff/new_out_cml_Rain_bas_stats_training_ref_sens_q75_p90_wet03")
+# output_dir = Path(r"/home/kkumah/Projects/cml-stuff/new_out_cml_Rain_bas_stats_training_ref")
 output_dir.mkdir(parents=True, exist_ok=True)
 
 diagnostics_dir = output_dir / "diagnostics"
@@ -77,11 +83,10 @@ lookback_hours = 72
 target_hour = 23
 target_minute = 59
 
-base_output_name = "ghana_cml_R_15min_bas_stats_ref"
-version = "V1"
-
+version = "V2_q75_p90_wet03"
+base_output_name = "ghana_cml_R_15min_bas_stats_ref_q75_p90_wet03"
 # If True, days with at least one existing output NetCDF are skipped.
-skip_existing_days = True
+skip_existing_days = False
 
 # Make expensive diagnostics for the peak day/timestamp. Keep False for long runs.
 make_daily_diagnostics = False
@@ -116,6 +121,32 @@ def write_day_failure(log_path: Path, day_str: str, exc: BaseException) -> None:
         f.write(traceback.format_exc())
         f.write("\n")
 
+def quick_Aobs_diagnostics(df_A, label="df_A"):
+    a = pd.to_numeric(df_A["A_obs_dB"], errors="coerce").to_numpy(float)
+    wet = df_A["wet_final"].fillna(False).astype(bool).to_numpy() if "wet_final" in df_A else df_A["wet_rl"].fillna(False).astype(bool).to_numpy()
+
+    finite = np.isfinite(a)
+
+    print("\n" + "=" * 80)
+    print(f"{label} attenuation diagnostics")
+    print("=" * 80)
+    print("finite count:", int(finite.sum()))
+    print("wet fraction:", float(np.nanmean(wet)))
+    if finite.any():
+        print("A_obs min/max:", float(np.nanmin(a[finite])), float(np.nanmax(a[finite])))
+        print("A_obs mean all:", float(np.nanmean(a[finite])))
+        print("A_obs > 0 fraction:", float(np.nanmean((a[finite] > 0))))
+        print("A_obs percentiles all:",
+            np.nanpercentile(a[finite], [50, 75, 90, 95, 99, 99.5, 99.9]))
+    else:
+        print("No finite A_obs values.")
+        return
+
+    if np.any(wet & finite):
+        print("A_obs wet mean:", float(np.nanmean(a[wet & finite])))
+        print("A_obs wet percentiles:",
+              np.nanpercentile(a[wet & finite], [50, 75, 90, 95, 99]))
+    print("=" * 80)
 
 def run_one_output_day(
     *,
@@ -184,9 +215,9 @@ def run_one_output_day(
     df_A, wetdry_thresholds = stats_wetdry_Aobs(
         ts_15,
         window_bins=10,
-        std_percentile=95.0,
+        std_percentile=90.0,
         baseline_win="48H",
-        baseline_q=0.50,
+        baseline_q=0.75,
         min_dry_bins=8,
         ffill_limit_bins=32,
         require_src_present=True,
@@ -204,6 +235,8 @@ def run_one_output_day(
         wet_col="wet_final",
     )
 
+    quick_Aobs_diagnostics(df_A, label="Bas method before k-alpha")
+
     df_rate = rainlink_strict_R(
         df_A,
         R_min=0.0,
@@ -214,6 +247,38 @@ def run_one_output_day(
     link_rain_csv = output_dir / f"link_level_cml_rainfall_stats_wetdry_{output_day.strftime('%Y%m%d')}.csv"
     df_rate.to_csv(link_rain_csv, index=False)
     print("Saved link-level rainfall:", link_rain_csv)
+
+    def quick_link_rain_diagnostics(df_rate, label="df_rate"):
+        r = pd.to_numeric(df_rate["R_mm_per_h"], errors="coerce").to_numpy(float)
+        finite = np.isfinite(r)
+        wet01 = finite & (r >= 0.10)
+        wet03 = finite & (r >= 0.30)
+        wet08 = finite & (r >= 0.80)
+
+        print("\n" + "=" * 80)
+        print(f"{label} link-rain diagnostics")
+        print("=" * 80)
+        print("finite count:", int(finite.sum()))
+        if finite.any():
+            print("min/max:", float(np.nanmin(r[finite])), float(np.nanmax(r[finite])))
+            print("mean all:", float(np.nanmean(r[finite])))
+        else:
+            print("No finite rain-rate values.")
+            return
+        print("zero fraction:", float(np.nanmean(r[finite] == 0.0)))
+        print("wet fraction >= 0.10:", float(np.nanmean(wet01[finite])))
+        print("wet fraction >= 0.30:", float(np.nanmean(wet03[finite])))
+        print("wet fraction >= 0.80:", float(np.nanmean(wet08[finite])))
+
+        if wet01.any():
+            print("mean wet >= 0.10:", float(np.nanmean(r[wet01])))
+            print("wet percentiles >= 0.10:",
+                np.nanpercentile(r[wet01], [50, 75, 90, 95, 99]))
+
+        print("all percentiles:",
+            np.nanpercentile(r[finite], [50, 75, 90, 95, 99, 99.5, 99.9]))
+        print("=" * 80)
+    quick_link_rain_diagnostics(df_rate, label="Bas method before gridding")
 
     # -------------------------------------------------------------------------
     # 5. Prepare selected output day for gridding
@@ -233,7 +298,7 @@ def run_one_output_day(
         fixed_extent=(-3.5, 1.5, 4.5, 11.5),
         grid_res_deg=0.03,
 
-        wet_thr=0.8,
+        wet_thr=0.3,
         dry_thr=0.05,
 
         ok_model="exponential",
@@ -258,7 +323,7 @@ def run_one_output_day(
         confidence_power=1.1,
         confidence_dry_penalty_weight=0.50,
 
-        drizzle_to_zero=0.10,
+        drizzle_to_zero=0.1,
         outside_support_fill=np.nan,
         insufficient_training_fill=np.nan,
 
@@ -287,13 +352,20 @@ def run_one_output_day(
     )
 
     print("Gridding counts:", diag.get("counts"))
-    print("Coverage-quality counts:", diag.get("coverage_quality_counts"))
-    print("Generated timestamps:", grid_ds.sizes.get("time"))
+    cov_counts = diag.get("coverage_quality_counts", [])
+    print("Coverage-quality counts first 3:", cov_counts[:3])
+    print("Coverage-quality counts last 3:", cov_counts[-3:])
+
+    n_grid_times = int(grid_ds.sizes["time"])
+    print("Generated timestamps:", n_grid_times)
+
+    if n_grid_times == 0:
+        raise RuntimeError("Gridding produced zero timestamps; nothing to save.")
 
     # -------------------------------------------------------------------------
     # 6b. Optional diagnostics
     # -------------------------------------------------------------------------
-    if make_daily_diagnostics and grid_ds.sizes.get("time", 0) > 0:
+    if make_daily_diagnostics and grid_ds.sizes["time"] > 0:
         rain_max_by_time = grid_ds["R_mm_per_h"].max(dim=("lat", "lon"), skipna=True)
         imax = int(rain_max_by_time.argmax(dim="time").values)
         t_peak = pd.to_datetime(grid_ds["time"].values[imax])
@@ -419,3 +491,595 @@ if __name__ == "__main__":
     print(summary["status"].value_counts(dropna=False))
     print("Summary saved:", summary_file)
     print("=" * 80)
+
+
+#%%
+# plot_one_cml_nc_ghana_map.py
+#
+# Plot one 15-min CML rainfall NetCDF file on a Ghana border map.
+
+# import numpy as np
+# import pandas as pd
+# import xarray as xr
+# import matplotlib.pyplot as plt
+# import matplotlib.colors as mcolors
+
+# import cartopy.crs as ccrs
+# import cartopy.feature as cfeature
+
+
+# # ============================================================
+# # 1. USER SETTINGS
+# # ============================================================
+
+# nc_file = (
+#     "/home/kkumah/Projects/cml-stuff/"
+#     "new_out_cml_Rain_bas_stats_training_ref_sens_q75_p90_wet01/"
+#     "ghana_cml_R_15min_bas_stats_ref_q75_p90_wet01_20250615T001500Z.nc"
+# )
+
+# rain_var = "R_mm_per_h"
+
+# # Ghana map extent: lon_min, lon_max, lat_min, lat_max
+# extent = (-3.5, 1.5, 4.5, 11.5)
+
+# # Plot controls
+# vmin = 0.0
+# vmax = 8.0
+# nbins = 15
+# cmap = "Spectral_r"
+
+# plot_link_points = True
+# plot_support_mask_outline = True
+
+# save_plot = True
+# out_png = "ghana_cml_rainfall_one_file.png"
+
+
+# # ============================================================
+# # 2. OPEN DATA
+# # ============================================================
+
+# ds = xr.open_dataset(nc_file)
+
+# # print(ds)
+# print("Variables:", list(ds.data_vars))
+
+# if rain_var not in ds:
+#     raise KeyError(f"{rain_var} not found. Available variables: {list(ds.data_vars)}")
+
+# R = ds[rain_var]
+
+# # If time dimension exists with length 1, select the first/only time.
+# if "time" in R.dims:
+#     R2d = R.isel(time=0)
+#     plot_time = pd.to_datetime(ds["time"].values[0])
+# else:
+#     R2d = R
+#     plot_time = "unknown time"
+
+# # Convert encoded fill values to NaN if needed.
+# R2d = R2d.where(np.isfinite(R2d))
+# R2d = R2d.where(R2d > -9990)
+
+# # Also mask unsupported pixels if support mask exists.
+# if "cml_support_mask" in ds:
+#     support = ds["cml_support_mask"]
+#     if "time" in support.dims:
+#         support2d = support.isel(time=0)
+#     else:
+#         support2d = support
+
+#     # Keep rainfall only where support mask == 1
+#     R2d = R2d.where(support2d == 1)
+# else:
+#     support2d = None
+
+
+# # ============================================================
+# # 3. COLOR LEVELS
+# # ============================================================
+
+# levels = np.linspace(vmin, vmax, nbins + 1)
+# norm = mcolors.BoundaryNorm(levels, ncolors=plt.get_cmap(cmap).N, clip=False)
+
+
+# # ============================================================
+# # 4. PLOT GHANA MAP
+# # ============================================================
+
+# fig = plt.figure(figsize=(8, 9))
+# ax = plt.axes(projection=ccrs.PlateCarree())
+
+# ax.set_extent(extent, crs=ccrs.PlateCarree())
+
+# # Background map features
+# ax.add_feature(cfeature.LAND, facecolor="lightgray", alpha=0.25)
+# ax.add_feature(cfeature.OCEAN, facecolor="white")
+# ax.add_feature(cfeature.COASTLINE, linewidth=0.8)
+# ax.add_feature(cfeature.BORDERS, linewidth=1.1)
+# ax.add_feature(cfeature.LAKES, linewidth=0.4, edgecolor="black", facecolor="none")
+# ax.add_feature(cfeature.RIVERS, linewidth=0.3, alpha=0.5)
+
+# # Rainfall field
+# pcm = ax.pcolormesh(
+#     R2d["lon"].values,
+#     R2d["lat"].values,
+#     R2d.values,
+#     transform=ccrs.PlateCarree(),
+#     cmap=cmap,
+#     norm=norm,
+#     shading="auto",
+# )
+
+# # Optional support-mask contour
+# if plot_support_mask_outline and support2d is not None:
+#     ax.contour(
+#         support2d["lon"].values,
+#         support2d["lat"].values,
+#         support2d.values,
+#         levels=[0.5],
+#         colors="black",
+#         linewidths=0.6,
+#         transform=ccrs.PlateCarree(),
+#     )
+
+# # Optional link midpoint overlay
+# if plot_link_points:
+#     if ("link_lon" in ds) and ("link_lat" in ds):
+#         link_lon = ds["link_lon"].values
+#         link_lat = ds["link_lat"].values
+
+#         if "R_point_mm_per_h" in ds:
+#             Rpt = ds["R_point_mm_per_h"]
+#             if "time" in Rpt.dims:
+#                 Rpt = Rpt.isel(time=0)
+
+#             rpoint = Rpt.values
+#             wet_links = np.isfinite(rpoint) & (rpoint >= 0.10)
+#             dry_links = np.isfinite(rpoint) & (rpoint < 0.10)
+
+#             ax.scatter(
+#                 link_lon[dry_links],
+#                 link_lat[dry_links],
+#                 s=8,
+#                 marker="o",
+#                 color="gray",
+#                 alpha=0.35,
+#                 transform=ccrs.PlateCarree(),
+#                 label="dry/weak links",
+#                 zorder=5,
+#             )
+
+#             ax.scatter(
+#                 link_lon[wet_links],
+#                 link_lat[wet_links],
+#                 s=18,
+#                 marker="o",
+#                 color="black",
+#                 alpha=0.85,
+#                 transform=ccrs.PlateCarree(),
+#                 label="wet links",
+#                 zorder=6,
+#             )
+#         else:
+#             ax.scatter(
+#                 link_lon,
+#                 link_lat,
+#                 s=8,
+#                 color="black",
+#                 alpha=0.5,
+#                 transform=ccrs.PlateCarree(),
+#                 label="CML link midpoints",
+#                 zorder=5,
+#             )
+
+# # Gridlines
+# gl = ax.gridlines(
+#     draw_labels=True,
+#     linewidth=0.4,
+#     color="gray",
+#     alpha=0.5,
+#     linestyle="--",
+# )
+# gl.top_labels = False
+# gl.right_labels = False
+
+# # Colorbar
+# cbar = plt.colorbar(
+#     pcm,
+#     ax=ax,
+#     orientation="vertical",
+#     pad=0.03,
+#     shrink=0.82,
+#     boundaries=levels,
+#     ticks=levels[::2],
+#     extend="max",
+# )
+# cbar.set_label("CML rainfall rate (mm h$^{-1}$)")
+
+# # Title
+# ax.set_title(
+#     f"Ghana CML rainfall\n{plot_time}",
+#     fontsize=14,
+# )
+
+# if plot_link_points:
+#     ax.legend(loc="lower left", fontsize=8, frameon=True)
+
+# plt.tight_layout()
+
+# if save_plot:
+#     plt.savefig(out_png, dpi=200, bbox_inches="tight")
+#     print("Saved plot:", out_png)
+
+# plt.show()
+
+# ds.close()
+
+#%%
+# plot_daily_cml_equivalent_rainfall_ghana.py
+#
+# Daily CML rainfall diagnostic:
+#   daily_equivalent_mm_day = mean(15-min R_mm_per_h maps over day) * 24
+#
+# This is daily-equivalent rainfall in mm/day.
+# It is not strict accumulation unless all 96 15-min maps are present.
+
+# import os
+# import glob
+# import numpy as np
+# import pandas as pd
+# import xarray as xr
+# import matplotlib.pyplot as plt
+# import matplotlib.colors as mcolors
+
+# import cartopy.crs as ccrs
+# import cartopy.feature as cfeature
+
+
+# # ============================================================
+# # 1. USER SETTINGS
+# # ============================================================
+
+# cml_nc_dir = (
+#     "/home/kkumah/Projects/cml-stuff/"
+#     "new_out_cml_Rain_bas_stats_training_ref_sens_q75_p90_wet01"
+# )
+
+# target_day = "2025-06-15"
+
+# file_pattern = "ghana_cml_R_15min_bas_stats_ref_q75_p90_wet01_*.nc"
+
+# rain_var = "R_mm_per_h"
+# support_var = "cml_support_mask"
+
+# # Ghana map extent: lon_min, lon_max, lat_min, lat_max
+# extent = (-3.5, 1.5, 4.5, 11.5)
+
+# # Plot controls
+# vmin = 0.0
+# vmax = 70.0
+# nbins = 20
+# cmap = "Spectral_r"
+
+# plot_link_points = True
+# plot_support_outline = True
+
+# save_plot = True
+# out_png = f"ghana_cml_daily_equivalent_{target_day}.png"
+
+
+# # ============================================================
+# # 2. FIND FILES FOR SELECTED DAY
+# # ============================================================
+
+# day_tag = pd.Timestamp(target_day).strftime("%Y%m%d")
+
+# all_files = sorted(glob.glob(os.path.join(cml_nc_dir, file_pattern)))
+
+# day_files = [
+#     f for f in all_files
+#     if day_tag in os.path.basename(f)
+# ]
+
+# if len(day_files) == 0:
+#     raise FileNotFoundError(
+#         f"No NetCDF files found for {target_day} in:\n{cml_nc_dir}"
+#     )
+
+# print(f"Found {len(day_files)} files for {target_day}")
+# print("First file:", os.path.basename(day_files[0]))
+# print("Last file :", os.path.basename(day_files[-1]))
+
+
+# # ============================================================
+# # 3. OPEN AND COMBINE DAILY FILES
+# # ============================================================
+
+# ds = xr.open_mfdataset(
+#     day_files,
+#     combine="nested",
+#     concat_dim="time",
+#     data_vars="all",
+#     coords="minimal",
+#     compat="override",
+#     join="override",
+#     parallel=False,
+# )
+
+# # Ensure chronological order
+# ds = ds.sortby("time")
+
+# # print(ds)
+# print("Time coverage:", pd.to_datetime(ds.time.values[0]), "to", pd.to_datetime(ds.time.values[-1]))
+# print("Number of 15-min maps:", ds.sizes["time"])
+
+
+# # ============================================================
+# # 4. CLEAN RAINFALL FIELD
+# # ============================================================
+
+# R = ds[rain_var].astype("float32")
+
+# # Convert encoded missing values to NaN
+# R = R.where(np.isfinite(R))
+# R = R.where(R > -9990)
+
+# # Optional: mask unsupported pixels before daily averaging
+# if support_var in ds:
+#     support = ds[support_var]
+#     R = R.where(support == 1)
+
+# # Optional: remove negative values if any slipped through
+# R = R.where(R >= 0.0)
+
+
+# # ============================================================
+# # 5. DAILY-EQUIVALENT RAINFALL
+# # ============================================================
+# # Since R is mm/h:
+# # daily-equivalent mm/day = mean rain rate over available 15-min maps * 24
+
+# daily_equiv = R.mean(dim="time", skipna=True) * 24.0
+# daily_equiv.name = "R_daily_equiv_mm_day"
+# daily_equiv.attrs["units"] = "mm day-1"
+
+# # Useful diagnostics
+# n_times = ds.sizes["time"]
+# coverage_fraction = n_times / 96.0
+
+# print("\nDaily diagnostics")
+# print("-----------------")
+# print("Expected full-day 15-min maps:", 96)
+# print("Available maps:", n_times)
+# print("Temporal coverage fraction:", coverage_fraction)
+# print("Daily-equivalent min/max:", float(daily_equiv.min(skipna=True)), float(daily_equiv.max(skipna=True)))
+# print("Daily-equivalent mean:", float(daily_equiv.mean(skipna=True)))
+
+# if n_times < 96:
+#     print(
+#         "\nNOTE: fewer than 96 maps are available. "
+#         "This is mean rain rate × 24, not strict observed accumulation."
+#     )
+
+
+# # ============================================================
+# # 6. DAILY SUPPORT MASK / VALID COVERAGE
+# # ============================================================
+
+# # Fraction of available timesteps where each pixel had valid CML support.
+# valid_fraction = R.notnull().mean(dim="time")
+# valid_fraction.name = "daily_valid_fraction"
+
+# # A loose daily support outline: pixels valid at least 10% of available times.
+# daily_support_mask = valid_fraction >= 0.10
+
+
+# # ============================================================
+# # 7. LINK MIDPOINT SUMMARY FOR DAILY OVERLAY
+# # ============================================================
+
+# link_lon = None
+# link_lat = None
+# wet_link_daily = None
+
+# if plot_link_points and ("link_lon" in ds) and ("link_lat" in ds):
+#     link_lon = ds["link_lon"].isel(time=0).values if "time" in ds["link_lon"].dims else ds["link_lon"].values
+#     link_lat = ds["link_lat"].isel(time=0).values if "time" in ds["link_lat"].dims else ds["link_lat"].values
+
+#     if "R_point_mm_per_h" in ds:
+#         Rpt = ds["R_point_mm_per_h"].astype("float32")
+#         Rpt = Rpt.where(np.isfinite(Rpt))
+#         Rpt = Rpt.where(Rpt > -9990)
+#         Rpt = Rpt.where(Rpt >= 0.0)
+
+#         # Daily-equivalent link rainfall: mean link rain rate × 24
+#         Rpt_daily = Rpt.mean(dim="time", skipna=True) * 24.0
+#         wet_link_daily = Rpt_daily.values >= 1.0  # mm/day threshold for display only
+
+
+# # ============================================================
+# # 8. PLOT DAILY MAP
+# # ============================================================
+
+# levels = np.linspace(vmin, vmax, nbins + 1)
+# norm = mcolors.BoundaryNorm(levels, ncolors=plt.get_cmap(cmap).N, clip=False)
+
+# fig = plt.figure(figsize=(8.5, 9.5))
+# ax = plt.axes(projection=ccrs.PlateCarree())
+
+# ax.set_extent(extent, crs=ccrs.PlateCarree())
+
+# # Background features
+# ax.add_feature(cfeature.LAND, facecolor="lightgray", alpha=0.25)
+# ax.add_feature(cfeature.OCEAN, facecolor="white")
+# ax.add_feature(cfeature.COASTLINE, linewidth=0.8)
+# ax.add_feature(cfeature.BORDERS, linewidth=1.1)
+# ax.add_feature(cfeature.LAKES, linewidth=0.4, edgecolor="black", facecolor="none")
+# ax.add_feature(cfeature.RIVERS, linewidth=0.3, alpha=0.5)
+
+# # Rain field
+# pcm = ax.pcolormesh(
+#     daily_equiv["lon"].values,
+#     daily_equiv["lat"].values,
+#     daily_equiv.values,
+#     transform=ccrs.PlateCarree(),
+#     cmap=cmap,
+#     norm=norm,
+#     shading="auto",
+# )
+
+# # Daily support outline
+# if plot_support_outline:
+#     ax.contour(
+#         daily_support_mask["lon"].values,
+#         daily_support_mask["lat"].values,
+#         daily_support_mask.values.astype(int),
+#         levels=[0.5],
+#         colors="black",
+#         linewidths=0.7,
+#         transform=ccrs.PlateCarree(),
+#     )
+
+# # Link midpoint overlay
+# if plot_link_points and link_lon is not None and link_lat is not None:
+#     if wet_link_daily is not None:
+#         ax.scatter(
+#             link_lon[~wet_link_daily],
+#             link_lat[~wet_link_daily],
+#             s=8,
+#             color="gray",
+#             alpha=0.35,
+#             transform=ccrs.PlateCarree(),
+#             label="low daily link rain",
+#             zorder=5,
+#         )
+
+#         ax.scatter(
+#             link_lon[wet_link_daily],
+#             link_lat[wet_link_daily],
+#             s=18,
+#             color="black",
+#             alpha=0.85,
+#             transform=ccrs.PlateCarree(),
+#             label="wet daily links",
+#             zorder=6,
+#         )
+#     else:
+#         ax.scatter(
+#             link_lon,
+#             link_lat,
+#             s=8,
+#             color="black",
+#             alpha=0.5,
+#             transform=ccrs.PlateCarree(),
+#             label="CML link midpoints",
+#             zorder=5,
+#         )
+
+# # Gridlines
+# gl = ax.gridlines(
+#     draw_labels=True,
+#     linewidth=0.4,
+#     color="gray",
+#     alpha=0.5,
+#     linestyle="--",
+# )
+# gl.top_labels = False
+# gl.right_labels = False
+
+# # Colorbar
+# cbar = plt.colorbar(
+#     pcm,
+#     ax=ax,
+#     orientation="vertical",
+#     pad=0.03,
+#     shrink=0.82,
+#     boundaries=levels,
+#     ticks=levels[::2],
+#     extend="max",
+# )
+# cbar.set_label("Daily-equivalent CML rainfall (mm day$^{-1}$)")
+
+# ax.set_title(
+#     f"Ghana CML daily-equivalent rainfall\n"
+#     f"{target_day} | mean of {n_times} × 15-min maps × 24 h",
+#     fontsize=14,
+# )
+
+# if plot_link_points:
+#     ax.legend(loc="lower left", fontsize=8, frameon=True)
+
+# plt.tight_layout()
+
+# if save_plot:
+#     plt.savefig(out_png, dpi=220, bbox_inches="tight")
+#     print("Saved plot:", out_png)
+
+# plt.show()
+
+
+# # ============================================================
+# # 9. OPTIONAL: SAVE DAILY FIELD TO NETCDF
+# # ============================================================
+
+# save_daily_nc = True
+
+# if save_daily_nc:
+#     out_nc = f"ghana_cml_daily_equivalent_{day_tag}.nc"
+
+#     ds_daily = xr.Dataset(
+#         data_vars={
+#             "R_daily_equiv_mm_day": daily_equiv.astype("float32"),
+#             "daily_valid_fraction": valid_fraction.astype("float32"),
+#         },
+#         coords={
+#             "lat": daily_equiv["lat"],
+#             "lon": daily_equiv["lon"],
+#         },
+#         attrs={
+#             "title": "Ghana CML daily-equivalent rainfall",
+#             "day": target_day,
+#             "method": "mean 15-min CML rain rate multiplied by 24",
+#             "note": (
+#                 "This is daily-equivalent rainfall in mm/day. "
+#                 "If fewer than 96 15-min maps are available, it is not a strict accumulation."
+#             ),
+#             "n_15min_maps": int(n_times),
+#             "expected_full_day_maps": 96,
+#             "temporal_coverage_fraction": float(coverage_fraction),
+#         },
+#     )
+
+#     ds_daily["R_daily_equiv_mm_day"].attrs.update({
+#         "long_name": "Daily-equivalent CML rainfall",
+#         "units": "mm day-1",
+#     })
+
+#     ds_daily["daily_valid_fraction"].attrs.update({
+#         "long_name": "Fraction of available 15-min maps with valid supported CML rainfall",
+#         "units": "1",
+#     })
+
+#     enc = {
+#         "R_daily_equiv_mm_day": {
+#             "zlib": True,
+#             "complevel": 5,
+#             "shuffle": True,
+#             "dtype": "float32",
+#             "_FillValue": -9999.0,
+#         },
+#         "daily_valid_fraction": {
+#             "zlib": True,
+#             "complevel": 5,
+#             "shuffle": True,
+#             "dtype": "float32",
+#             "_FillValue": -9999.0,
+#         },
+#     }
+
+#     ds_daily.to_netcdf(out_nc, encoding=enc)
+#     print("Saved daily NetCDF:", out_nc)
+
+# ds.close()

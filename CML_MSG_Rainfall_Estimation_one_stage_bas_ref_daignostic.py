@@ -26,80 +26,27 @@ from quantnn.quantiles import posterior_quantiles
 #%% Paths
 path_to_msg_ir_fls = r'/home/kkumah/Projects/cml-stuff/satellite_data/msg_val'
 path_to_msg_clm_fls = r'/home/kkumah/Projects/cml-stuff/satellite_data/msg_clm_val'
-path_to_put_15min_cml_rainfall_estimates = r'/home/kkumah/Projects/cml-stuff/out_rain_trials/out_15min_V_May2026'
+path_to_put_15min_cml_rainfall_estimates = r'/home/kkumah/Projects/cml-stuff/out_rain_trials/out_15min_one_stage_diag'
 # r'/home/kkumah/Projects/cml-stuff/out_15min_cml_rain_oper'
-path_to_put_daily_cml_rainfall_estimates = r'/home/kkumah/Projects/cml-stuff/out_rain_trials/out_daily_V_May2026'
+path_to_put_daily_cml_rainfall_estimates = r'/home/kkumah/Projects/cml-stuff/out_rain_trials/out_daily_one_stage_diag'
+# r'/home/kkumah/Projects/cml-stuff/out_rain_trials/new_out_daily'
 # r'/home/kkumah/Projects/cml-stuff/out_rain_trials/out_daily_no_smooth_strict_lat_params'
 # r'/home/kkumah/Projects/cml-stuff/out_rain_trials/out_daily'
 # r'/home/kkumah/Projects/cml-stuff/out_daily_cml_rain_oper'
 
 LOG_DIR = Path("/home/kkumah/Projects/cml-stuff/out_logs")
 
-# Two-stage model output from CML_MSG_Satellite_based_Rainfall_Retrieval_twostage_basref_202605.py
-path_to_ml_model = r'/home/kkumah/Projects/cml-stuff/out_train_model_twostage_basref'
-
+path_to_ml_model = r'/home/kkumah/Projects/cml-stuff/out_train_model'
 #%% Floating Variables
-def _latest_file(pattern):
-    files = sorted(glob.glob(pattern))
-    if not files:
-        raise FileNotFoundError(f"No file found for pattern: {pattern}")
-    return files[-1]
+# load model later
+boosters_by_q = joblib.load(os.path.join(
+                            path_to_ml_model,
+                            'cmlsat_onestage_xgb_basref_diagnostic_models_20260522.pkl'))
 
-model_candidates = sorted(
-    glob.glob(os.path.join(path_to_ml_model, "cmlsat_twostage_xgb_basref_models_*.pkl"))
-)
-
-# Very important: exclude metadata pickle files.
-model_candidates = [
-    f for f in model_candidates
-    if not f.endswith("_meta.pkl")
-]
-
-if not model_candidates:
-    raise FileNotFoundError(
-        f"No two-stage model bundle found in {path_to_ml_model}. "
-        "Expected file like cmlsat_twostage_xgb_basref_models_YYYYMMDD.pkl"
-    )
-
-model_file = model_candidates[-1]
-meta_file = model_file.replace(".pkl", "_meta.pkl")
-print("Loading model bundle:", model_file)
-print("Loading metadata:", meta_file)
-
-model_bundle = joblib.load(model_file)
-print("Loaded model bundle keys:", model_bundle.keys())
-
-classifier = model_bundle["classifier"]
-boosters_by_q = model_bundle["intensity_quantile_boosters"]
-# Normalize quantile-regressor dictionary keys to rounded Python floats.
-# This avoids KeyError from np.float32 vs np.float64 key differences.
-boosters_by_q = {
-    round(float(k), 4): v
-    for k, v in boosters_by_q.items()
-}
-
-meta = joblib.load(meta_file) if os.path.exists(meta_file) else {}
-
-wet_prob_threshold = float(
-    meta.get("classifier_recommended_threshold", 0.5)
-)
-
-qs_dense = np.asarray(
-    meta.get("qs_dense", np.linspace(0.05, 0.95, 19)),
-    dtype="float64"
-)
-
-qs_dense = np.array([round(float(q), 4) for q in qs_dense], dtype="float64")
-
-print("Using wet/dry probability threshold:", wet_prob_threshold)
-print("Using quantiles:", qs_dense)
-
-# Recommended classifier threshold selected from internal holdout CSI during training.
-WET_PROB_THR = float(meta.get("classifier_recommended_threshold", 0.35))
-
-print("Loaded two-stage CML-SAT model:", model_file)
-print("Loaded metadata:", meta_file if os.path.exists(meta_file) else "None")
-print("Wet-probability threshold:", WET_PROB_THR)
+meta = joblib.load(os.path.join(
+                   path_to_ml_model, 
+                   'cmlsat_onestage_xgb_basref_diagnostic_models_20260522_meta.pkl'))
+qs_dense = meta["qs_dense"]
 
 # 15-min cadence (CML); adjust if you prefer per-minute
 TIME_ROUND = '15min'
@@ -262,34 +209,35 @@ def rasterize_me(meta_data, polygon2rasterize, rast_val):
 def kstd_by_lat_xr(lat_grid, dtrans=0.5):
     """
     Latitude-dependent kstd with smooth transitions.
+    Tuned to reduce wet bias while preserving convective cores.
+    •	Coastal (<5°): 0.95
+	•	Forest / transition (5–8°): 1.00
+	•	Savanna (>8°): 1.05
 
-    Revised for two-stage CML-SAT application:
-    - Keep coastal/forest zones moderately permissive.
-    - Reduce northern savanna strictness to avoid suppressing real rainfall.
-    - Use smooth transitions near ~5N and ~8N.
+    Parameters
+    ----------
+    lat_grid : xr.DataArray
+        Latitude field (2D or 1D, degrees_north)
+    dtrans : float
+        Transition width in degrees (default: 0.5)
 
-    Interpretation:
-    lower kstd = more permissive wet-patch retention
-    higher kstd = stricter wet-patch retention
+    Returns
+    -------
+    kstd : xr.DataArray
+        Smooth kstd field
     """
 
-    k_coast = 0.98      # < ~5N
-    k_mid   = 0.88      # ~5–8N, forest/transition
-    k_north = 0.92      # > ~8N, reduced from 1.10 to recover northern rainfall
-
     kstd = xr.where(
-        lat_grid < 5 - dtrans / 2,
-        k_coast,
+        lat_grid < 5 - dtrans / 2, 1.00,  # Coastal Savanna, 0.95
         xr.where(
             lat_grid < 5 + dtrans / 2,
-            k_coast + (lat_grid - (5 - dtrans / 2)) / dtrans * (k_mid - k_coast),
+            1.00 + (lat_grid - (5 - dtrans / 2)) / dtrans * (1.05 - 1.00), # 1.00
             xr.where(
-                lat_grid < 8 - dtrans / 2,
-                k_mid,
+                lat_grid < 8 - dtrans / 2, 0.89,  # Forest / Transition
                 xr.where(
                     lat_grid < 8 + dtrans / 2,
-                    k_mid + (lat_grid - (8 - dtrans / 2)) / dtrans * (k_north - k_mid),
-                    k_north
+                    0.89 + (lat_grid - (8 - dtrans / 2)) / dtrans * (1.0 - 0.89),
+                    1.1  # Guinea Savanna and beyond
                 )
             )
         )
@@ -802,200 +750,6 @@ def predict_slice_meanq(time_val,
 
 #     return rain_final, rain_mean
 #-------------------------
-def predict_slice_twostage_hurdle(
-    time_val,
-    BT_IR108,
-    BT_IR120,
-    BT_WV062,
-    BT_diff,
-    mask_cloud,
-    win_smooth,
-    wet_prob_thr=WET_PROB_THR,
-    apply_patch=False,
-    drizzle_floor=0.03,
-    return_diagnostics=False,
-):
-    """
-    Two-stage/hurdle CML-SAT retrieval for one 15-min MSG time slice.
-
-    Stage 1: MSG-based wet/dry classifier predicts rainfall occurrence probability.
-    Stage 2: Wet-only quantile regressors estimate intensity only where Stage 1 says wet.
-    Optional final gate: existing latitude/zonal IR108 patch correction refines occurrence.
-
-    Returns
-    -------
-    rain_final : xr.DataArray
-        Final rainfall rate after wet/dry classifier, wet-only intensity, drizzle floor,
-        optional IR108 patch gate, and optional smoothing.
-    rain_raw : xr.DataArray
-        Rainfall before patch gate/smoothing, but after classifier gate.
-    diag : dict, optional
-        wet_probability, wet_mask_classifier, wet_mask_patch/final.
-    """
-
-    # --------------------------------------------------
-    # 1. Gather cloud-screened features
-    # --------------------------------------------------
-    def _select_time_if_present(da, time_val=None):
-        """
-        Return one y/x slice whether da has:
-        - dimensions (time, y, x), or
-        - dimensions (y, x), or
-        - scalar time coordinate but no time dimension.
-        """
-        if "time" in da.dims:
-            return da.sel(time=time_val)
-        return da
-
-
-    b1_0 = _select_time_if_present(BT_IR108, time_val)
-    b2_0 = _select_time_if_present(BT_IR120, time_val)
-    b3_0 = _select_time_if_present(BT_WV062, time_val)
-    bd_0 = _select_time_if_present(BT_diff, time_val)
-    mc_0 = _select_time_if_present(mask_cloud, time_val)
-
-    b1 = b1_0.where(mc_0).transpose("y", "x")
-    b2 = b2_0.where(mc_0).transpose("y", "x")
-    b3 = b3_0.where(mc_0).transpose("y", "x")
-    bd = bd_0.where(mc_0).transpose("y", "x")
-
-    valid = (
-        np.isfinite(b1.values) &
-        np.isfinite(b2.values) &
-        np.isfinite(b3.values) &
-        np.isfinite(bd.values)
-    )
-
-    if valid.sum() == 0:
-        out = xr.zeros_like(b1, dtype="float32").fillna(0.0)
-        out.name = "rain_rate"
-        out.attrs["units"] = "mm h-1"
-        if return_diagnostics:
-            diag = {
-                "wet_probability": out.copy(),
-                "wet_mask_classifier": out.copy(),
-                "wet_mask_final": out.copy(),
-            }
-            return out, out, diag
-        return out, out
-
-    X = np.column_stack([
-        b1.values[valid],
-        b2.values[valid],
-        b3.values[valid],
-        bd.values[valid],
-    ]).astype("float32")
-
-    dX = xgb.DMatrix(X, feature_names=feat_names, nthread=18)
-
-    # --------------------------------------------------
-    # 2. Stage 1: wet/dry classifier
-    # --------------------------------------------------
-    wet_prob_flat = classifier.predict(dX).astype("float32")
-    wet_cls_flat = wet_prob_flat >= float(wet_prob_thr)
-
-    wet_prob = xr.full_like(b1, 0.0, dtype="float32")
-    wet_prob.values[valid] = wet_prob_flat
-    wet_prob.name = "wet_probability"
-    wet_prob.attrs["long_name"] = "MSG-based rainfall occurrence probability"
-    wet_prob.attrs["units"] = "1"
-
-    wet_mask_classifier = xr.full_like(b1, 0, dtype="int8")
-    wet_mask_classifier.values[valid] = wet_cls_flat.astype("int8")
-    wet_mask_classifier.name = "wet_mask_classifier"
-    wet_mask_classifier.attrs["long_name"] = "Wet mask from MSG classifier before IR108 patch correction"
-    wet_mask_classifier.attrs["units"] = "1"
-
-    # --------------------------------------------------
-    # 3. Stage 2: wet-only intensity model
-    # --------------------------------------------------
-    r_flat = np.zeros(X.shape[0], dtype="float32")
-
-    if wet_cls_flat.any():
-        X_wet = X[wet_cls_flat]
-        dX_wet = xgb.DMatrix(X_wet, feature_names=feat_names, nthread=18)
-
-        Yq_wet = np.column_stack([
-            invf(boosters_by_q[round(float(q), 4)].predict(dX_wet))
-            for q in qs_dense
-        ]).astype("float32")
-
-        # Enforce non-crossing quantiles.
-        Yq_wet = np.maximum.accumulate(Yq_wet, axis=1)
-
-        # Keep the same conservative conditional intensity reducer from the older code.
-        r_wet = low_or_q70_quantile_reducer(
-            Yq=Yq_wet,
-            qs=qs_dense,
-            q_thresh=0.30,
-            q_high=0.90,
-        ).astype("float32")
-
-        r_flat[wet_cls_flat] = np.clip(r_wet, 0.0, None)
-
-    rain_raw = xr.full_like(b1, 0.0, dtype="float32")
-    rain_raw.values[valid] = r_flat
-    rain_raw.name = "rain_rate_raw_classifier_intensity"
-    rain_raw.attrs["units"] = "mm h-1"
-    rain_raw.attrs["long_name"] = "Rainfall rate after classifier gate and wet-only intensity model, before IR108 patch correction"
-
-    # --------------------------------------------------
-    # 4. Existing latitude/zonal IR108 patch correction as final occurrence refinement
-    # --------------------------------------------------
-    rain_final = rain_raw.copy()
-    wet_mask_final = wet_mask_classifier.copy()
-    wet_mask_final.name = "wet_mask_final"
-
-    if apply_patch:
-        lat_grid = b1["y"].broadcast_like(b1)
-        kstd_grid = kstd_by_lat_xr(lat_grid)
-
-        meta_rio = xarray_meta_from_da(b1)
-
-        # Patch operates on the classifier wet mask, not intensity > 0.
-        corr_wet = correct_wet_mask(
-            wet_mask_classifier.values.astype(np.int16),
-            b1.values.astype("float32"),
-            meta_rio,
-            use_std=True,
-            lat_grid=kstd_grid,
-        )
-
-        corr_wet = np.where(np.isfinite(corr_wet), corr_wet, 0).astype("int8")
-        rain_final = rain_final.where(corr_wet == 1, 0.0)
-
-        wet_mask_final = xr.full_like(b1, 0, dtype="int8")
-        wet_mask_final.values = corr_wet
-        wet_mask_final.name = "wet_mask_final"
-        wet_mask_final.attrs["long_name"] = "Final wet mask after classifier and optional IR108 patch correction"
-        wet_mask_final.attrs["units"] = "1"
-
-    # --------------------------------------------------
-    # 5. Drizzle floor and optional in-wet smoothing
-    # --------------------------------------------------
-    if drizzle_floor is not None:
-        rain_final.values = np.where(rain_final.values < drizzle_floor, 0.0, rain_final.values)
-
-    if (win_smooth[0] == "Yes") and (win_smooth[1] > 1):
-        rain_final = smooth_da_mean(rain_final, win=win_smooth[1])
-
-    rain_final.name = "rain_rate"
-    rain_final.attrs["units"] = "mm h-1"
-    rain_final.attrs["long_name"] = "Two-stage CML-SAT rainfall rate: classifier occurrence + wet-only quantile intensity"
-
-    if return_diagnostics:
-        diag = {
-            "wet_probability": wet_prob,
-            "wet_mask_classifier": wet_mask_classifier,
-            "wet_mask_final": wet_mask_final,
-            "rain_rate_raw_classifier_intensity": rain_raw,
-        }
-        return rain_final, rain_raw, diag
-
-    return rain_final, rain_raw
-
-
-# Backward-compatible name used by the older daily driver.
 def predict_slice_regime_conditional_meanq(
     time_val,
     BT_IR108,
@@ -1007,21 +761,123 @@ def predict_slice_regime_conditional_meanq(
     apply_patch=True,
     drizzle_floor=0.03,
 ):
-    return predict_slice_twostage_hurdle(
-        time_val=time_val,
-        BT_IR108=BT_IR108,
-        BT_IR120=BT_IR120,
-        BT_WV062=BT_WV062,
-        BT_diff=BT_diff,
-        mask_cloud=mask_cloud,
-        win_smooth=win_smooth,
-        wet_prob_thr=WET_PROB_THR,
-        apply_patch=apply_patch,
-        drizzle_floor=drizzle_floor,
-        return_diagnostics=False,
+    """
+    Conditional quantile rainfall retrieval with PATCH-CONTROLLED OCCURRENCE
+    and UNPATCHED INTENSITY logic.
+
+    Returns
+    -------
+    rain_final : xr.DataArray
+        Final rainfall estimate (mm h-1)  <-- USE THIS
+    rain_mean : xr.DataArray
+        Posterior-mean rainfall (diagnostic only)
+    """
+
+    # --------------------------------------------------
+    # 1. Gather features
+    # --------------------------------------------------
+    b1 = BT_IR108.sel(time=time_val).where(mask_cloud.sel(time=time_val))
+    b2 = BT_IR120.sel(time=time_val).where(mask_cloud.sel(time=time_val))
+    b3 = BT_WV062.sel(time=time_val).where(mask_cloud.sel(time=time_val))
+    bd = BT_diff .sel(time=time_val).where(mask_cloud.sel(time=time_val))
+
+    valid = (
+        np.isfinite(b1) &
+        np.isfinite(b2) &
+        np.isfinite(b3) &
+        np.isfinite(bd)
     )
 
+    if valid.sum().item() == 0:
+        out = xr.zeros_like(b1).fillna(0.0)
+        out.attrs["units"] = "mm h-1"
+        return out, out
 
+    # --------------------------------------------------
+    # 2. Dense quantile prediction
+    # --------------------------------------------------
+    X = np.column_stack([
+        b1.values[valid],
+        b2.values[valid],
+        b3.values[valid],
+        bd.values[valid],
+    ]).astype("float32")
+
+    dX = xgb.DMatrix(X, feature_names=feat_names, nthread=18)
+
+    Yq = np.column_stack([
+        invf(boosters_by_q[q].predict(dX)) for q in qs_dense
+    ]).astype("float32")
+
+    # enforce monotonicity
+    Yq = np.maximum.accumulate(Yq, axis=1)
+
+    # --------------------------------------------------
+    # 3. Posterior mean (FIRST GUESS — UNPATCHED)
+    # --------------------------------------------------
+    from quantnn.quantiles import posterior_mean
+    r_mean_flat = posterior_mean(Yq, quantiles=qs_dense).astype("float32")
+
+    rain_mean = xr.full_like(b1, 0.0, dtype="float32")
+    rain_mean.values[valid] = np.clip(r_mean_flat, 0.0, None)
+    rain_mean.attrs["units"] = "mm h-1"
+
+    # --------------------------------------------------
+    # 4. Patch correction (OCCURRENCE ONLY)
+    # --------------------------------------------------
+    corr_wet = None
+
+    if apply_patch:
+        lat_grid = b1["y"].broadcast_like(b1)
+        kstd_grid = kstd_by_lat_xr(lat_grid)
+
+        meta = xarray_meta_from_da(b1)
+
+        # IMPORTANT: patch mask derived ONLY from rain_mean
+        wet_grid = (rain_mean.values > 0).astype(np.int16)
+
+        corr_wet = correct_wet_mask(
+            wet_grid,
+            b1.values.astype("float32"),
+            meta,
+            use_std=True,
+            lat_grid=kstd_grid,
+        )
+
+    # --------------------------------------------------
+    # 5. CONDITIONAL QUANTILE INTENSITY (UNPATCHED LOGIC)
+    # --------------------------------------------------
+    # NOTE: NO patch influence here — intensity only
+    r_regime = low_or_q70_quantile_reducer(
+        Yq=Yq,
+        qs=qs_dense,
+        q_thresh=0.30,   # below this → mean(0–0.3)
+        q_high=0.75,     # above → q70
+    )
+
+    # --------------------------------------------------
+    # 6. APPLY PATCH MASK (FINAL GATE ONLY)
+    # --------------------------------------------------
+    if apply_patch:
+        patch_mask_flat = corr_wet[valid] == 1
+        r_regime = np.where(patch_mask_flat, r_regime, 0.0)
+
+    # --------------------------------------------------
+    # 7. Final map
+    # --------------------------------------------------
+    rain_final = xr.full_like(b1, 0.0, dtype="float32")
+    rain_final.values[valid] = np.clip(r_regime, 0.0, None)
+    rain_final.attrs["units"] = "mm h-1"
+
+    # drizzle floor
+    if drizzle_floor is not None:
+        rain_final.values[rain_final.values < drizzle_floor] = 0.0
+
+    # smoothing
+    if (win_smooth[0] == "Yes") and (win_smooth[1] > 1):
+        rain_final = smooth_da_mean(rain_final, win=win_smooth[1])
+
+    return rain_final, rain_mean
 # -------------------------
 # OPEN + REPROJECT + CLIP + INTERP (per day)
 # -------------------------
@@ -1061,11 +917,7 @@ def open_and_prepare_msg_day(day_str,
     msg_bt = xr.open_mfdataset(
         bt_day,
         combine="by_coords",
-        parallel=False,
-        data_vars="minimal",
-        coords="minimal",
-        compat="override",
-        join="override",
+        parallel=False
     )
 
     msg_clm = None
@@ -1073,11 +925,7 @@ def open_and_prepare_msg_day(day_str,
         msg_clm = xr.open_mfdataset(
             clm_day,
             combine="by_coords",
-            parallel=False,
-            data_vars="minimal",
-            coords="minimal",
-            compat="override",
-            join="override",
+            parallel=False
         )
 
     msg_bt  = round_time_index(msg_bt,  TIME_ROUND)
@@ -1140,10 +988,7 @@ def predict_day_15min(msg_bt_ll, msg_clm_ll, *,
     BT_WV062 = ds_bt["BT_WV062"].where(mask_cloud)
     BT_diff  = (BT_IR108 - BT_WV062).where(mask_cloud)
 
-    if "time" in msg_bt_ll.dims:
-        times_day = pd.to_datetime(msg_bt_ll.time.values)
-    else:
-        times_day = [pd.to_datetime(msg_bt_ll.time.values)]
+    times_day = ds_bt.time.values
 
     preds = []
     for t in times_day:
@@ -1195,7 +1040,7 @@ def ensure_time_dim(da, time_value):
 # SAVE NETCDF (1 file/day)
 # -------------------------
 
-def save_day_files(R15, Rd, day_str, alg="V2_twostage_basref", producer="K. K. Kumah"):
+def save_day_files(R15, Rd, day_str, alg="V1", producer="K. K. Kumah"):
     os.makedirs(path_to_put_15min_cml_rainfall_estimates, exist_ok=True)
     os.makedirs(path_to_put_daily_cml_rainfall_estimates, exist_ok=True)
 
@@ -1215,7 +1060,7 @@ def save_day_files(R15, Rd, day_str, alg="V2_twostage_basref", producer="K. K. K
         "institution": "TRANS-AFRICAN HYDRO-METEOROLOGICAL OBSERVATORY (TAHMO)",
         "institution_url": "https://tahmo.org/",
         "producer": producer,
-        "algorithm": f"Two-stage XGBoost hurdle model; classifier occurrence + wet-only quantile intensity; patch_filter=IR108",
+        "algorithm": f"XGBoost quantile regression; aggregation=posterior mean; patch_filter=IR108",
         "training_period": meta.get("training_period", "June–Aug 2025 (operational training)"),
         "time_coverage_start": str(pd.to_datetime(R15.time.values[0]).to_pydatetime()),
         "time_coverage_end": str(pd.to_datetime(R15.time.values[-1]).to_pydatetime()),
@@ -1224,7 +1069,7 @@ def save_day_files(R15, Rd, day_str, alg="V2_twostage_basref", producer="K. K. K
         "grid_res_deg": str(res_deg),
         "crs": "EPSG:4326",
         "notes": "Operational forward processing; 15-min rate saved + daily total saved separately.",
-        "model_file": os.path.basename(model_file),
+        "model_file": os.path.basename("xgb_quantile_models_ghana_oper_20251229.pkl"),
     }
     ds15.attrs.update(common_attrs)
     ds15.attrs["n_time_steps"] = int(ds15.dims["time"])
@@ -1285,17 +1130,18 @@ for day in days:
     R15 = predict_day_15min(msg_bt_ll, msg_clm_ll,
                             win_smooth=('Yes', 3), 
                             apply_patch=True, 
-                            drizzle_floor=0.01, 
+                            drizzle_floor=0.03, 
                             )
 
     Rd = daily_total_from_15min(R15)
 
-    save_day_files(R15, Rd, day_str, alg="V2_twostage_basref", producer="K. K. Kumah")
+    save_day_files(R15, Rd, day_str, alg="V1", producer="K. K. Kumah")
 
 print("Done.")
 print('*'*50)
 
-# Stop here during batch processing. Diagnostic plotting cells below can be run manually if needed.
+xxx
+
 #%%
 # plot using cartopy to show boundary
 import matplotlib.pyplot as plt
@@ -1324,7 +1170,7 @@ def add_geo(ax):
 
 da = Rd  # your DataArray (y=lat, x=lon)
 da = da.sortby("y")  # safety: ensures south->north increasing
-daily_bins = np.arange(0,15.25,1.5)
+daily_bins = np.arange(0,10.25,0.5)
 # [
 #     0,   1,   2,   5,   10,
 #     20,  30,  40
